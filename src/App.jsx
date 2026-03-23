@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
 
-const API = "https://dac-healthprice-api.onrender.com/"; // UPDATE to your Render URL
+const API = "https://dac-healthprice-api.onrender.com";
 const LOGO_URL = "/DAC.jpg"; // Your logo in /public
 
 async function apiCall(path, body) {
@@ -274,20 +274,29 @@ export default function App() {
   };
 
   // AI tip on plan step
+  const getAiRecommendedTier = () => {
+    if (peCount >= 3 || (inp.smoking_status === "Current" && inp.age > 50)) return "Platinum";
+    if (peCount >= 2 || inp.smoking_status === "Current" || inp.age > 55) return "Gold";
+    if (peCount >= 1 || inp.age > 40) return "Silver";
+    return "Silver"; // default safe choice
+  };
+  const aiTier = step === 2 ? getAiRecommendedTier() : null;
+
   useEffect(() => {
     if (step !== 2) { setAiTip(""); return; }
-    if (peCount >= 2 && inp.ipd_tier === "Bronze") {
-      setAiTip(`With ${peCount} pre-existing conditions, <strong>Gold tier</strong> is recommended — $40K surgery limit vs Bronze's $5K.`);
-    } else if (inp.smoking_status === "Current") {
-      setAiTip("Smokers have ~40% higher claim frequency. <strong>Gold or Platinum</strong> provides better coverage headroom.");
-    } else if (inp.age > 55) {
-      setAiTip(`At age ${inp.age}, claims are above average. <strong>Gold tier</strong> balances coverage and cost.`);
-    } else if (peCount === 0 && inp.age < 40) {
+    const rec = getAiRecommendedTier();
+    if (rec === "Platinum") {
+      setAiTip(`High-risk profile detected (${peCount} conditions${inp.smoking_status === "Current" ? ", smoker" : ""}, age ${inp.age}). <strong>Platinum</strong> gives maximum protection with $150K limit and $0 deductible.`);
+    } else if (rec === "Gold" && inp.ipd_tier !== "Gold" && inp.ipd_tier !== "Platinum") {
+      setAiTip(`With your risk profile, <strong>Gold tier</strong> is recommended — $40K surgery limit and only $100 deductible provide strong coverage.`);
+    } else if (rec === "Silver" && peCount === 0 && inp.age < 40) {
       setAiTip("<strong>Silver tier</strong> is solid for your low-risk profile. Bronze saves more but has a $500 deductible.");
     } else {
       setAiTip("");
     }
   }, [step, inp.ipd_tier, inp.smoking_status, inp.age, peCount]);
+
+  const [showAbout, setShowAbout] = useState(false);
 
   // Rider config for rendering
   const RIDER_CFG = [
@@ -302,11 +311,21 @@ export default function App() {
       <div className="app">
         {/* NAV */}
         <nav className="nav">
-          <div className="nav-brand" onClick={() => { setStep(0); setResult(null); }}>
+          <div className="nav-brand" onClick={() => { setStep(0); setResult(null); setShowAbout(false); }}>
             <Logo size={48} />
             <span className="nav-title">DAC HealthPrice</span>
           </div>
           <div className="nav-right">
+            <button onClick={() => setShowAbout(false)} style={{
+              background: !showAbout ? "rgba(255,255,255,.12)" : "transparent",
+              color: !showAbout ? "var(--gold)" : "rgba(255,255,255,.5)",
+              border: "none", cursor: "pointer", padding: "4px 12px", borderRadius: 4, fontSize: 11, fontWeight: !showAbout ? 600 : 400, fontFamily: "var(--fb)"
+            }}>Pricing</button>
+            <button onClick={() => setShowAbout(true)} style={{
+              background: showAbout ? "rgba(255,255,255,.12)" : "transparent",
+              color: showAbout ? "var(--gold)" : "rgba(255,255,255,.5)",
+              border: "none", cursor: "pointer", padding: "4px 12px", borderRadius: 4, fontSize: 11, fontWeight: showAbout ? 600 : 400, fontFamily: "var(--fb)"
+            }}>About</button>
             <span style={{ fontSize: 11, color: "rgba(255,255,255,.5)", padding: "4px 10px", borderRadius: 4, background: "rgba(255,255,255,.08)" }}>Cambodia</span>
             <div className="status">
               <div className={`dot ${apiOk ? "ok" : "off"}`} />
@@ -314,6 +333,95 @@ export default function App() {
             </div>
           </div>
         </nav>
+
+        {/* ABOUT PAGE */}
+        {showAbout ? (
+          <div className="wizard" style={{ animation: "fadeIn .3s ease both" }}>
+            <div style={{ textAlign: "center", marginBottom: 28 }}>
+              <Logo size={64} />
+              <div style={{ fontSize: 24, fontWeight: 500, marginTop: 12 }}>About DAC HealthPrice</div>
+              <div style={{ fontSize: 13, color: "var(--txt2)", marginTop: 4 }}>AI-powered hospital reimbursement insurance pricing</div>
+            </div>
+
+            <div className="card">
+              <div className="card-label">Our mission</div>
+              <p style={{ fontSize: 14, color: "var(--txt2)", lineHeight: 1.7 }}>
+                DAC HealthPrice brings transparent, data-driven pricing to hospital reimbursement insurance in Cambodia. We believe everyone deserves to understand what they're paying for and why. Our platform uses actuarial modeling to deliver fair, personalized premiums based on individual risk profiles — not guesswork.
+              </p>
+            </div>
+
+            <div className="card">
+              <div className="card-label">How it works</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                {[
+                  { num: "1", title: "Tell us about yourself", desc: "Age, gender, region, and family size help us understand your demographic profile." },
+                  { num: "2", title: "Share your health profile", desc: "Smoking habits, exercise routine, occupation, and pre-existing conditions determine your risk level." },
+                  { num: "3", title: "Choose your plan", desc: "Select an IPD tier (Bronze to Platinum) and add optional OPD, Dental, or Maternity riders." },
+                  { num: "4", title: "Get your quote", desc: "Our frequency-severity model calculates your personalized premium with a full actuarial breakdown." },
+                ].map(s => (
+                  <div key={s.num} style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
+                    <div style={{ width: 28, height: 28, borderRadius: "50%", background: "var(--navy)", color: "var(--gold)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 600, flexShrink: 0 }}>{s.num}</div>
+                    <div>
+                      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 2 }}>{s.title}</div>
+                      <div style={{ fontSize: 12, color: "var(--txt2)", lineHeight: 1.5 }}>{s.desc}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="card">
+              <div className="card-label">Our technology</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                {[
+                  { title: "Frequency-severity model", desc: "Poisson regression predicts how often you'll claim. Gradient boosting predicts how much each claim costs." },
+                  { title: "8 trained ML models", desc: "Separate frequency + severity models for IPD, OPD, Dental, and Maternity coverage types." },
+                  { title: "Real-time AI advisor", desc: "Built-in AI chatbot recommends the best plan for your profile and explains your pricing." },
+                  { title: "Secure and validated", desc: "API key authentication, rate limiting, cross-region validation, and champion/challenger model promotion." },
+                ].map(t => (
+                  <div key={t.title} style={{ background: "var(--surf2)", borderRadius: 10, padding: 14 }}>
+                    <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>{t.title}</div>
+                    <div style={{ fontSize: 11, color: "var(--txt2)", lineHeight: 1.5 }}>{t.desc}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="card">
+              <div className="card-label">Coverage options</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <div style={{ padding: "3px 8px", borderRadius: 4, background: "var(--navy)", color: "white", fontSize: 10, fontWeight: 600 }}>CORE</div>
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 600 }}>IPD hospital reimbursement</div>
+                    <div style={{ fontSize: 11, color: "var(--txt3)" }}>Bronze ($15K) · Silver ($40K) · Gold ($80K) · Platinum ($150K)</div>
+                  </div>
+                </div>
+                {[
+                  { name: "OPD rider", desc: "Outpatient consultations, lab tests, minor procedures" },
+                  { name: "Dental rider", desc: "Cleanings, fillings, extractions, X-rays" },
+                  { name: "Maternity rider", desc: "Prenatal visits, delivery, newborn care" },
+                ].map(r => (
+                  <div key={r.name} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <div style={{ padding: "3px 8px", borderRadius: 4, background: "var(--gold-bg)", color: "var(--gold-d)", fontSize: 10, fontWeight: 600 }}>ADD-ON</div>
+                    <div>
+                      <div style={{ fontSize: 13, fontWeight: 600 }}>{r.name}</div>
+                      <div style={{ fontSize: 11, color: "var(--txt3)" }}>{r.desc}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="card" style={{ background: "var(--navy)", color: "white", textAlign: "center" }}>
+              <div style={{ fontSize: 16, fontWeight: 500, marginBottom: 6 }}>Ready to get your quote?</div>
+              <div style={{ fontSize: 12, opacity: 0.6, marginBottom: 14 }}>It takes less than 2 minutes</div>
+              <button className="btn btn-gold" onClick={() => { setShowAbout(false); setStep(0); }}>
+                Start pricing
+              </button>
+            </div>
+          </div>
+        ) : (
 
         <div className="wizard">
           {/* PROGRESS BAR */}
@@ -363,7 +471,16 @@ export default function App() {
                   </div>
                   <div className="fg">
                     <label className="fl">Family size</label>
-                    <input className="fi" type="number" min="1" max="10" value={inp.family_size} onChange={e => u("family_size", Math.max(1, Math.min(10, parseInt(e.target.value) || 1)))} />
+                    <input className="fi" type="number" min="1" max="10"
+                      value={inp.family_size === 0 ? "" : inp.family_size}
+                      onChange={e => {
+                        const raw = e.target.value;
+                        if (raw === "") { u("family_size", 0); return; }
+                        const n = parseInt(raw);
+                        if (!isNaN(n)) u("family_size", Math.min(10, Math.max(0, n)));
+                      }}
+                      onBlur={() => { if (!inp.family_size || inp.family_size < 1) u("family_size", 1); }}
+                    />
                   </div>
                 </div>
               </div>
@@ -461,7 +578,7 @@ export default function App() {
                 <div className="tier-grid">
                   {Object.entries(TIERS).map(([k, v]) => (
                     <div key={k} className={`tier-card ${inp.ipd_tier === k ? "sel" : ""}`} onClick={() => u("ipd_tier", k)}>
-                      {k === "Gold" && peCount >= 2 && <div className="rec">Recommended</div>}
+                      {aiTier === k && <div className="rec">AI recommended</div>}
                       <div className="tier-name">{k}</div>
                       <div className="tier-detail">{v.limit} limit</div>
                       <div className="tier-detail">{v.room}</div>
@@ -567,6 +684,7 @@ export default function App() {
             </div>
           )}
         </div>
+        )}
 
         {/* AI CHAT */}
         <AIChat inp={inp} result={result} />
