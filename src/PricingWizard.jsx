@@ -314,32 +314,6 @@ export default function PricingWizard() {
     <>
       <style>{CSS}</style>
       <div className="app">
-        {/* NAV */}
-        <nav className="nav">
-          <div className="nav-brand" onClick={() => { setStep(0); setResult(null); setShowAbout(false); setShowAdmin(false); }}>
-            <Logo size={48} />
-            <span className="nav-title">DAC HealthPrice</span>
-          </div>
-          <div className="nav-right">
-            {[
-              { label: "Pricing", active: !showAbout && !showAdmin, onClick: () => { setShowAbout(false); setShowAdmin(false); } },
-              { label: "About", active: showAbout, onClick: () => { setShowAbout(true); setShowAdmin(false); } },
-              { label: "Admin", active: showAdmin, onClick: () => { setShowAdmin(true); setShowAbout(false); } },
-            ].map(tab => (
-              <button key={tab.label} onClick={tab.onClick} style={{
-                background: tab.active ? "rgba(255,255,255,.12)" : "transparent",
-                color: tab.active ? "var(--gold)" : "rgba(255,255,255,.5)",
-                border: "none", cursor: "pointer", padding: "4px 12px", borderRadius: 4,
-                fontSize: 11, fontWeight: tab.active ? 600 : 400, fontFamily: "var(--fb)",
-              }}>{tab.label}</button>
-            ))}
-            <span style={{ fontSize: 11, color: "rgba(255,255,255,.5)", padding: "4px 10px", borderRadius: 4, background: "rgba(255,255,255,.08)" }}>Cambodia</span>
-            <div className="status">
-              <div className={`dot ${apiOk ? "ok" : "off"}`} />
-              {apiOk ? "Connected" : "Offline"}
-            </div>
-          </div>
-        </nav>
 
         {/* ABOUT PAGE */}
         {showAbout ? (
@@ -621,6 +595,8 @@ export default function PricingWizard() {
                   <div className="fg">
                     <label className="fl">Age</label>
                     <input className="fi" type="number" min="0" max="100"
+                      inputMode="numeric" pattern="[0-9]*"
+                      onKeyDown={e => { if (["e","E","+","-","."].includes(e.key)) e.preventDefault(); }}
                       value={inp.age === 0 ? "" : inp.age}
                       onChange={e => {
                         const raw = e.target.value;
