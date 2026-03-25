@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import PricingWizard from "./PricingWizard";
 
+
 const NAVY = "#1a1a2e";
 const NAVY_D = "#0f0f1e";
 const NAVY_L = "#2d2d44";
@@ -122,6 +123,7 @@ export default function App() {
       {page === "Pricing" && <PricingPage />}
       {page === "About" && <AboutPage />}
       {page === "Contact" && <ContactPage />}
+      {page === "Admin" && <AdminPage />}
 
       {/* ═══ FOOTER ═══ */}
       <footer style={{ background: NAVY_D, color: GRAY, padding: "64px 24px 32px" }}>
@@ -140,7 +142,12 @@ export default function App() {
             </div>
             <div>
               <h4 style={{ color: WHITE, fontSize: 14, fontWeight: 600, marginBottom: 16, textTransform: "uppercase", letterSpacing: 1 }}>Company</h4>
-              {["About DAC", "Our Team", "Careers", "Contact Us"].map(s => <p key={s} style={{ fontSize: 14, marginBottom: 10, cursor: "pointer" }}>{s}</p>)}
+              {[
+                { label: "About DAC", go: "About" },
+                { label: "Contact Us", go: "Contact" },
+                { label: "Get a Quote", go: "Pricing" },
+              ].map(s => <p key={s.label} onClick={() => { setPage(s.go); window.scrollTo(0,0); }} style={{ fontSize: 14, marginBottom: 10, cursor: "pointer" }}>{s.label}</p>)}
+              <p onClick={() => { setPage("Admin"); window.scrollTo(0,0); }} style={{ fontSize: 12, marginTop: 16, cursor: "pointer", opacity: 0.4 }}>Admin portal</p>
             </div>
             <div>
               <h4 style={{ color: WHITE, fontSize: 14, fontWeight: 600, marginBottom: 16, textTransform: "uppercase", letterSpacing: 1 }}>Contact</h4>
@@ -392,7 +399,7 @@ function HomePage({ onGetQuote }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // PRICING PAGE (placeholder — your existing wizard goes here)
 // ═══════════════════════════════════════════════════════════════════════════════
-function PricingPage() {
+function PricingPage() {  
     return (
       <section style={{ paddingTop: 80 }}>
         <PricingWizard />
@@ -496,6 +503,134 @@ function ContactPage() {
           <div style={{ marginTop: 40, padding: 24, background: LTGRAY, borderRadius: 12 }}>
             <p style={{ fontWeight: 600, marginBottom: 8 }}>DAC Phnom Penh Office</p>
             <p style={{ color: TXT2, fontSize: 14, lineHeight: 1.8 }}>Email: brook@dac.com.tw<br />Phone: +855 XX XXX XXXX<br />Phnom Penh, Cambodia</p>
+          </div>
+        </FadeIn>
+      </div>
+    </section>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ADMIN PAGE (password-gated, accessed via footer link)
+// ═══════════════════════════════════════════════════════════════════════════════
+function AdminPage() {
+  const [key, setKey] = useState("");
+  const [authed, setAuthed] = useState(false);
+  const [status, setStatus] = useState(null);
+  const [uploadResult, setUploadResult] = useState(null);
+  const [uploading, setUploading] = useState(false);
+  const [file, setFile] = useState(null);
+  const [covType, setCovType] = useState("ipd");
+  const [autoRetrain, setAutoRetrain] = useState(false);
+
+  const API = "https://dac-healthprice-api.onrender.com";
+
+  const checkHealth = async () => {
+    try {
+      const r = await fetch(`${API}/health`);
+      setStatus(await r.json());
+    } catch { setStatus({ error: "Cannot reach API" }); }
+  };
+
+  const handleUpload = async () => {
+    if (!file || !key) return;
+    setUploading(true); setUploadResult(null);
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("coverage_type", covType);
+    fd.append("auto_retrain", autoRetrain);
+    try {
+      const r = await fetch(`${API}/api/v2/admin/upload-dataset`, {
+        method: "POST", headers: { "X-API-Key": key }, body: fd
+      });
+      setUploadResult(await r.json());
+    } catch (e) { setUploadResult({ status: "error", detail: e.message }); }
+    setUploading(false);
+  };
+
+  if (!authed) {
+    return (
+      <section style={{ paddingTop: 120, paddingBottom: 80, minHeight: "80vh" }}>
+        <div style={{ maxWidth: 400, margin: "0 auto", padding: "0 24px", textAlign: "center" }}>
+          <div style={{ width: 56, height: 56, borderRadius: 16, background: NAVY, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 20px" }}>
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M12 2C9.24 2 7 4.24 7 7v3H5v12h14V10h-2V7c0-2.76-2.24-5-5-5zm0 2c1.66 0 3 1.34 3 3v3H9V7c0-1.66 1.34-3 3-3z" fill={GOLD}/></svg>
+          </div>
+          <h2 style={{ fontFamily: "'Playfair Display', serif", fontSize: 28, fontWeight: 700, marginBottom: 8 }}>Admin portal</h2>
+          <p style={{ color: TXT2, fontSize: 14, marginBottom: 24 }}>Enter your API key to access the dashboard</p>
+          <input type="password" placeholder="Enter admin API key" value={key}
+            onChange={e => setKey(e.target.value)}
+            onKeyDown={e => { if (e.key === "Enter" && key) setAuthed(true); }}
+            style={{ width: "100%", padding: "12px 16px", borderRadius: 10, border: "1px solid #d1d5db", fontSize: 15, fontFamily: "inherit", marginBottom: 12, outline: "none" }} />
+          <button className="gold-btn" style={{ width: "100%" }} onClick={() => { if (key) setAuthed(true); }}>Authenticate</button>
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <section style={{ paddingTop: 100, paddingBottom: 80 }}>
+      <div style={{ maxWidth: 800, margin: "0 auto", padding: "0 24px" }}>
+        <FadeIn>
+          <span style={{ color: GOLD_D, fontSize: 14, fontWeight: 600, letterSpacing: 2, textTransform: "uppercase" }}>Admin dashboard</span>
+          <h2 style={{ fontFamily: "'Playfair Display', serif", fontSize: 36, fontWeight: 700, marginTop: 12, marginBottom: 32 }}>System management</h2>
+        </FadeIn>
+
+        <FadeIn delay={0.1}>
+          <div style={{ background: WHITE, borderRadius: 16, padding: 28, border: "1px solid #e5e7eb", marginBottom: 24 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+              <h3 style={{ fontSize: 18, fontWeight: 600 }}>System status</h3>
+              <button className="gold-btn" style={{ padding: "8px 20px", fontSize: 13 }} onClick={checkHealth}>Refresh</button>
+            </div>
+            {status ? (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 12 }}>
+                {[
+                  { label: "Status", value: status.status || "Error", ok: status.status === "healthy" },
+                  { label: "Models", value: status.models_loaded?.length || 0, ok: (status.models_loaded?.length || 0) >= 8 },
+                  { label: "Database", value: status.database_connected ? "Connected" : "Offline", ok: status.database_connected },
+                  { label: "Version", value: status.model_version || "N/A" },
+                ].map((s, i) => (
+                  <div key={i} style={{ background: LTGRAY, borderRadius: 10, padding: 16 }}>
+                    <p style={{ fontSize: 12, color: TXT2, marginBottom: 4 }}>{s.label}</p>
+                    <p style={{ fontSize: 16, fontWeight: 600, color: s.ok === false ? "#ef4444" : s.ok ? "#10b981" : TXT }}>{s.value}</p>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p style={{ color: TXT2, fontSize: 14 }}>Click "Refresh" to check system status</p>
+            )}
+          </div>
+        </FadeIn>
+
+        <FadeIn delay={0.2}>
+          <div style={{ background: WHITE, borderRadius: 16, padding: 28, border: "1px solid #e5e7eb" }}>
+            <h3 style={{ fontSize: 18, fontWeight: 600, marginBottom: 16 }}>Upload claims dataset</h3>
+            <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+              <div>
+                <label style={{ fontSize: 13, fontWeight: 500, color: TXT2, display: "block", marginBottom: 6 }}>Coverage type</label>
+                <select value={covType} onChange={e => setCovType(e.target.value)}
+                  style={{ width: "100%", padding: "10px 14px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 14, fontFamily: "inherit" }}>
+                  {["ipd", "opd", "dental", "maternity"].map(c => <option key={c} value={c}>{c.toUpperCase()}</option>)}
+                </select>
+              </div>
+              <div>
+                <label style={{ fontSize: 13, fontWeight: 500, color: TXT2, display: "block", marginBottom: 6 }}>CSV file</label>
+                <input type="file" accept=".csv" onChange={e => setFile(e.target.files?.[0] || null)}
+                  style={{ width: "100%", padding: "10px 14px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 14 }} />
+              </div>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+                <input type="checkbox" checked={autoRetrain} onChange={e => setAutoRetrain(e.target.checked)} />
+                <span style={{ fontSize: 14, color: TXT }}>Auto-retrain model after upload</span>
+              </label>
+              <button className="gold-btn" onClick={handleUpload} disabled={!file || uploading}
+                style={{ opacity: !file || uploading ? 0.5 : 1 }}>
+                {uploading ? "Uploading..." : "Upload dataset"}
+              </button>
+            </div>
+            {uploadResult && (
+              <div style={{ marginTop: 16, padding: 16, borderRadius: 10, background: uploadResult.status === "accepted" ? "#ecfdf5" : "#fef2f2", border: `1px solid ${uploadResult.status === "accepted" ? "#a7f3d0" : "#fecaca"}` }}>
+                <pre style={{ fontSize: 12, whiteSpace: "pre-wrap", margin: 0, color: TXT }}>{JSON.stringify(uploadResult, null, 2)}</pre>
+              </div>
+            )}
           </div>
         </FadeIn>
       </div>
