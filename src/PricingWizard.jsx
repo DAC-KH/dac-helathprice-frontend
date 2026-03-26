@@ -801,13 +801,17 @@ export default function PricingWizard() {
                 <div className="row2" style={{ marginTop: 12 }}>
                   <div className="fg">
                     <label className="fl">Hospitalizations (last 3 yrs)</label>
-                    <input className="fi" type="number" min="0" max="10" value={inp.prev_hospitalizations}
-                      onChange={e => { const n = parseInt(e.target.value); if (!isNaN(n)) u("prev_hospitalizations", Math.min(10, Math.max(0, n))); }} />
+                    <input className="fi" type="number" min="0" max="10"
+                      value={inp.prev_hospitalizations === 0 ? "" : inp.prev_hospitalizations}
+                      onChange={e => { const raw = e.target.value; if (raw === "") { u("prev_hospitalizations", 0); return; } const n = parseInt(raw); if (!isNaN(n)) u("prev_hospitalizations", n); }}
+                      onBlur={() => { const v = inp.prev_hospitalizations; if (!v || v < 0) u("prev_hospitalizations", 0); else if (v > 10) u("prev_hospitalizations", 10); }} />
                   </div>
                   <div className="fg">
                     <label className="fl">Regular medications</label>
-                    <input className="fi" type="number" min="0" max="15" value={inp.medications_count}
-                      onChange={e => { const n = parseInt(e.target.value); if (!isNaN(n)) u("medications_count", Math.min(15, Math.max(0, n))); }} />
+                    <input className="fi" type="number" min="0" max="15"
+                      value={inp.medications_count === 0 ? "" : inp.medications_count}
+                      onChange={e => { const raw = e.target.value; if (raw === "") { u("medications_count", 0); return; } const n = parseInt(raw); if (!isNaN(n)) u("medications_count", n); }}
+                      onBlur={() => { const v = inp.medications_count; if (!v || v < 0) u("medications_count", 0); else if (v > 15) u("medications_count", 15); }} />
                   </div>
                 </div>
                 <div className="fg" style={{ marginTop: 12 }}>
