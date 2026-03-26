@@ -21,13 +21,21 @@ const GENDERS = ["Male","Female","Other"];
 const SMOKING = ["Never","Former","Current"];
 const OCCUPATIONS = ["Office/Desk","Retail/Service","Healthcare","Manual Labor","Industrial/High-Risk","Retired"];
 const PREEXIST = ["None","Hypertension","Diabetes","Heart Disease","Asthma/COPD","Cancer (remission)","Kidney Disease","Liver Disease","Obesity","Mental Health"];
+const MARITAL_STATUS = ["Single","Married","Divorced","Widowed"];
+const ALCOHOL = ["Never","Occasional","Regular","Heavy"];
+const FAMILY_HISTORY_OPTIONS = ["None","Heart Disease","Diabetes","Cancer","Stroke","Hypertension"];
+const DIET = ["Healthy","Balanced","High Processed"];
+const SLEEP = ["Good (7-9h)","Fair (5-7h)","Poor (<5h)"];
+const STRESS = ["Low","Moderate","High"];
+const WATER_ACCESS = ["Piped/Safe","Well/Mixed","Limited"];
+const HEALTHCARE_PROX = ["<5km","5-20km",">20km"];
 const TIERS = {
   Bronze:   { limit: "$15,000",  room: "General Ward",   surg: "$5,000",  icu: "3 days",  ded: "$500",  dedN: 500 },
   Silver:   { limit: "$40,000",  room: "Semi-Private",   surg: "$15,000", icu: "7 days",  ded: "$250",  dedN: 250 },
   Gold:     { limit: "$80,000",  room: "Private Room",   surg: "$40,000", icu: "14 days", ded: "$100",  dedN: 100 },
   Platinum: { limit: "$150,000", room: "Private Suite",  surg: "$80,000", icu: "30 days", ded: "$0",    dedN: 0 },
 };
-const STEPS = ["Profile", "Health", "Plan", "Quote"];
+const STEPS = ["Profile", "Health", "Lifestyle", "Plan", "Quote"];
 const FB_FREQ = { ipd: 0.12, opd: 2.5, dental: 0.8, maternity: 0.15 };
 const FB_SEV = { ipd: 2500, opd: 60, dental: 120, maternity: 3500 };
 const TIER_F = { Bronze: 0.70, Silver: 1.00, Gold: 1.45, Platinum: 2.10 };
@@ -35,17 +43,30 @@ const LOAD = { ipd: 0.30, opd: 0.25, dental: 0.20, maternity: 0.25 };
 
 // ─── Local fallback pricing ─────────────────────────────────────────────────
 function localPrice(inp) {
-  const af = 1 + Math.max(0, (inp.age - 35)) * 0.008;
+  const agef = 1 + Math.max(0, (inp.age - 35)) * 0.008;
   const sf = { Never: 1, Former: 1.15, Current: 1.40 }[inp.smoking_status] || 1;
-  // Exercise: convert days*mins to weekly minutes, then map to factor
   const weeklyMins = (inp.exercise_days || 0) * (inp.exercise_mins || 0);
   const ef = weeklyMins <= 0 ? 1.20 : weeklyMins < 60 ? 1.10 : weeklyMins < 150 ? 0.95 : weeklyMins < 300 ? 0.85 : 0.75;
   const of_ = { "Office/Desk": 0.85, "Retail/Service": 1, "Healthcare": 1.05, "Manual Labor": 1.15, "Industrial/High-Risk": 1.30, "Retired": 1.10 }[inp.occupation_type] || 1;
   const pf = 1 + (inp.preexist_conditions.filter(p => p !== "None").length) * 0.20;
+  // New risk factors
+  const bmi = inp.bmi_weight && inp.bmi_height ? inp.bmi_weight / ((inp.bmi_height / 100) ** 2) : 22;
+  const bmif = bmi < 18.5 ? 1.10 : bmi < 25 ? 1.00 : bmi < 30 ? 1.15 : 1.35;
+  const alf = { Never: 1.00, Occasional: 1.05, Regular: 1.20, Heavy: 1.45 }[inp.alcohol] || 1.00;
+  const hospf = inp.prev_hospitalizations === 0 ? 1.00 : inp.prev_hospitalizations === 1 ? 1.25 : inp.prev_hospitalizations === 2 ? 1.50 : 1.80;
+  const medf = (inp.medications_count || 0) === 0 ? 1.00 : (inp.medications_count || 0) <= 2 ? 1.15 : (inp.medications_count || 0) <= 4 ? 1.30 : 1.50;
+  const fhf = 1 + ((inp.family_history || []).filter(x => x !== "None").length) * 0.10;
+  const mrf = { Single: 1.05, Married: 1.00, Divorced: 1.08, Widowed: 1.08 }[inp.marital_status] || 1.00;
+  const df = { Healthy: 0.90, Balanced: 1.00, "High Processed": 1.15 }[inp.diet] || 1.00;
+  const slf = { "Good (7-9h)": 1.00, "Fair (5-7h)": 1.10, "Poor (<5h)": 1.25 }[inp.sleep_quality] || 1.00;
+  const stf = { Low: 1.00, Moderate: 1.10, High: 1.25 }[inp.stress_level] || 1.00;
+  const mbf = inp.motorbike_daily === "Daily" ? 1.15 : inp.motorbike_daily === "Occasional" ? 1.05 : 1.00;
+  const waf = { "Piped/Safe": 1.00, "Well/Mixed": 1.08, "Limited": 1.18 }[inp.water_access] || 1.00;
+  const hpxf = { "<5km": 1.00, "5-20km": 1.05, ">20km": 1.12 }[inp.healthcare_proximity] || 1.00;
 
   const calc = (cov) => {
-    const freq = FB_FREQ[cov] * af * sf * ef * of_ * pf;
-    const sev = FB_SEV[cov] * (1 + Math.max(0, (inp.age - 30)) * 0.006);
+    const freq = FB_FREQ[cov] * agef * sf * ef * of_ * pf * bmif * alf * hospf * medf * fhf * mrf * df * slf * stf * mbf * waf;
+    const sev = FB_SEV[cov] * (1 + Math.max(0, (inp.age - 30)) * 0.006) * hpxf;
     return { frequency: Math.round(freq * 1000) / 1000, severity: Math.round(sev), expected_annual_cost: Math.round(freq * sev * 100) / 100, source: "local" };
   };
 
@@ -210,11 +231,24 @@ export default function PricingWizard() {
   const [aiTip, setAiTip] = useState("");
   const [inp, setInp] = useState({
     age: 35, gender: "Male", country: "cambodia", region: "Phnom Penh",
+    marital_status: "Single",
     smoking_status: "Never",
     exercise_days: 3, exercise_mins: 30,
-    exercise_frequency: "Moderate", // derived from days*mins for backend
+    exercise_frequency: "Moderate",
     occupation_type: "Office/Desk",
-    preexist_conditions: ["None"], ipd_tier: "Silver", family_size: 1,
+    preexist_conditions: ["None"],
+    bmi_height: 170, bmi_weight: 70,
+    alcohol: "Never",
+    prev_hospitalizations: 0,
+    medications_count: 0,
+    family_history: ["None"],
+    diet: "Balanced",
+    sleep_quality: "Good (7-9h)",
+    stress_level: "Low",
+    motorbike_daily: "No",
+    water_access: "Piped/Safe",
+    healthcare_proximity: "<5km",
+    ipd_tier: "Silver", family_size: 1,
     include_opd: false, include_dental: false, include_maternity: false,
   });
 
@@ -260,7 +294,7 @@ export default function PricingWizard() {
     } catch {
       res = localPrice(target); setResult(res); setIsLocal(true);
     } finally {
-      setLoading(false); setStep(3);
+      setLoading(false); setStep(4);
     }
     return res;
   }, [inp]);
@@ -284,10 +318,10 @@ export default function PricingWizard() {
     if (peCount >= 1 || inp.age > 40) return "Silver";
     return "Silver"; // default safe choice
   };
-  const aiTier = step === 2 ? getAiRecommendedTier() : null;
+  const aiTier = step === 3 ? getAiRecommendedTier() : null;
 
   useEffect(() => {
-    if (step !== 2) { setAiTip(""); return; }
+    if (step !== 3) { setAiTip(""); return; }
     const rec = getAiRecommendedTier();
     if (rec === "Platinum") {
       setAiTip(`High-risk profile detected (${peCount} conditions${inp.smoking_status === "Current" ? ", smoker" : ""}, age ${inp.age}). <strong>Platinum</strong> gives maximum protection with $150K limit and $0 deductible.`);
@@ -578,13 +612,13 @@ export default function PricingWizard() {
           <div className="steps">
             {STEPS.map((s, i) => (
               <React.Fragment key={i}>
-                <div className="step-item" onClick={() => { if (i <= step || (i === 3 && result)) setStep(i); }}>
-                  <div className={`step-dot ${i < step || (i === 3 && result) ? "done" : i === step ? "active" : "pending"}`}>
+                <div className="step-item" onClick={() => { if (i <= step || (i === 4 && result)) setStep(i); }}>
+                  <div className={`step-dot ${i < step || (i === 4 && result) ? "done" : i === step ? "active" : "pending"}`}>
                     {i < step ? <Ck s={12} /> : i + 1}
                   </div>
                   <span className={`step-label ${i < step ? "done" : i === step ? "active" : "pending"}`}>{s}</span>
                 </div>
-                {i < 3 && <div className={`step-line ${i < step ? "done" : "pending"}`} />}
+                {i < 4 && <div className={`step-line ${i < step ? "done" : "pending"}`} />}
               </React.Fragment>
             ))}
           </div>
@@ -639,6 +673,16 @@ export default function PricingWizard() {
                       }}
                       onBlur={() => { if (!inp.family_size || inp.family_size < 1) u("family_size", 1); }}
                     />
+                  </div>
+                </div>
+              </div>
+              <div className="card">
+                <div className="fg">
+                  <label className="fl">Marital status</label>
+                  <div className="chips">
+                    {MARITAL_STATUS.map(m => (
+                      <div key={m} className={`chip ${inp.marital_status === m ? "sel" : ""}`} onClick={() => u("marital_status", m)}>{m}</div>
+                    ))}
                   </div>
                 </div>
               </div>
@@ -718,6 +762,66 @@ export default function PricingWizard() {
                   </div>
                 </div>
               </div>
+
+              <div className="card">
+                <div className="card-label">Body metrics</div>
+                <div className="row2">
+                  <div className="fg">
+                    <label className="fl">Height (cm)</label>
+                    <input className="fi" type="number" min="100" max="220" value={inp.bmi_height}
+                      onChange={e => { const n = parseInt(e.target.value); if (!isNaN(n)) u("bmi_height", Math.min(220, Math.max(100, n))); }} />
+                  </div>
+                  <div className="fg">
+                    <label className="fl">Weight (kg)</label>
+                    <input className="fi" type="number" min="30" max="200" value={inp.bmi_weight}
+                      onChange={e => { const n = parseInt(e.target.value); if (!isNaN(n)) u("bmi_weight", Math.min(200, Math.max(30, n))); }} />
+                  </div>
+                </div>
+                {inp.bmi_height > 0 && inp.bmi_weight > 0 && (() => {
+                  const bmi = Math.round(inp.bmi_weight / ((inp.bmi_height / 100) ** 2) * 10) / 10;
+                  const cat = bmi < 18.5 ? { label: "Underweight", color: "#3b82f6" } : bmi < 25 ? { label: "Normal", color: "#059669" } : bmi < 30 ? { label: "Overweight", color: "#c46800" } : { label: "Obese", color: "#ef4444" };
+                  return <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4, fontSize: 12, color: "var(--txt2)" }}>BMI: <strong style={{ color: cat.color }}>{bmi} — {cat.label}</strong></div>;
+                })()}
+              </div>
+
+              <div className="card">
+                <div className="card-label">Lifestyle risk factors</div>
+                <div className="fg">
+                  <label className="fl">Alcohol consumption</label>
+                  <div className="chips">
+                    {ALCOHOL.map(a => (
+                      <div key={a} className={`chip ${inp.alcohol === a ? "sel" : ""}`} onClick={() => u("alcohol", a)}>{a}</div>
+                    ))}
+                  </div>
+                </div>
+                <div className="row2" style={{ marginTop: 12 }}>
+                  <div className="fg">
+                    <label className="fl">Hospitalizations (last 3 yrs)</label>
+                    <input className="fi" type="number" min="0" max="10" value={inp.prev_hospitalizations}
+                      onChange={e => { const n = parseInt(e.target.value); if (!isNaN(n)) u("prev_hospitalizations", Math.min(10, Math.max(0, n))); }} />
+                  </div>
+                  <div className="fg">
+                    <label className="fl">Regular medications</label>
+                    <input className="fi" type="number" min="0" max="15" value={inp.medications_count}
+                      onChange={e => { const n = parseInt(e.target.value); if (!isNaN(n)) u("medications_count", Math.min(15, Math.max(0, n))); }} />
+                  </div>
+                </div>
+                <div className="fg" style={{ marginTop: 12 }}>
+                  <label className="fl">Family medical history</label>
+                  <div className="chips">
+                    {FAMILY_HISTORY_OPTIONS.map(f => (
+                      <div key={f} className={`chip ${(inp.family_history || []).includes(f) ? (f === "None" ? "sel" : "warn") : ""}`}
+                        onClick={() => {
+                          const cur = inp.family_history || ["None"];
+                          if (f === "None") { u("family_history", ["None"]); return; }
+                          const without = cur.filter(x => x !== "None" && x !== f);
+                          u("family_history", cur.includes(f) ? (without.length ? without : ["None"]) : [...without, f]);
+                        }}>{f}</div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
               <div className="btn-row">
                 <button className="btn btn-back" onClick={() => setStep(0)}>Back</button>
                 <button className="btn btn-next" onClick={() => setStep(2)}>Continue</button>
@@ -725,8 +829,77 @@ export default function PricingWizard() {
             </div>
           )}
 
-          {/* STEP 3: PLAN */}
+          {/* STEP 3: LIFESTYLE */}
           {step === 2 && (
+            <div className="step-content">
+              <div className="step-title">Lifestyle & environment</div>
+              <div className="step-sub">Local factors that influence your health risk</div>
+
+              <div className="card">
+                <div className="card-label">Daily habits</div>
+                <div className="fg">
+                  <label className="fl">Diet type</label>
+                  <div className="chips">
+                    {DIET.map(d => (
+                      <div key={d} className={`chip ${inp.diet === d ? "sel" : ""}`} onClick={() => u("diet", d)}>{d}</div>
+                    ))}
+                  </div>
+                </div>
+                <div className="fg" style={{ marginTop: 12 }}>
+                  <label className="fl">Sleep quality</label>
+                  <div className="chips">
+                    {SLEEP.map(s => (
+                      <div key={s} className={`chip ${inp.sleep_quality === s ? "sel" : ""}`} onClick={() => u("sleep_quality", s)}>{s}</div>
+                    ))}
+                  </div>
+                </div>
+                <div className="fg" style={{ marginTop: 12 }}>
+                  <label className="fl">Stress level</label>
+                  <div className="chips">
+                    {STRESS.map(s => (
+                      <div key={s} className={`chip ${inp.stress_level === s ? "sel" : ""}`} onClick={() => u("stress_level", s)}>{s}</div>
+                    ))}
+                  </div>
+                </div>
+                <div className="fg" style={{ marginTop: 12 }}>
+                  <label className="fl">Motorbike usage</label>
+                  <div className="chips">
+                    {["No","Occasional","Daily"].map(m => (
+                      <div key={m} className={`chip ${inp.motorbike_daily === m ? "sel" : ""}`} onClick={() => u("motorbike_daily", m)}>{m}</div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="card">
+                <div className="card-label">Environment</div>
+                <div className="fg">
+                  <label className="fl">Water &amp; sanitation access</label>
+                  <div className="chips">
+                    {WATER_ACCESS.map(w => (
+                      <div key={w} className={`chip ${inp.water_access === w ? "sel" : ""}`} onClick={() => u("water_access", w)}>{w}</div>
+                    ))}
+                  </div>
+                </div>
+                <div className="fg" style={{ marginTop: 12 }}>
+                  <label className="fl">Distance to nearest hospital</label>
+                  <div className="chips">
+                    {HEALTHCARE_PROX.map(h => (
+                      <div key={h} className={`chip ${inp.healthcare_proximity === h ? "sel" : ""}`} onClick={() => u("healthcare_proximity", h)}>{h}</div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="btn-row">
+                <button className="btn btn-back" onClick={() => setStep(1)}>Back</button>
+                <button className="btn btn-next" onClick={() => setStep(3)}>Continue</button>
+              </div>
+            </div>
+          )}
+
+          {/* STEP 4: PLAN */}
+          {step === 3 && (
             <div className="step-content">
               <div className="step-title">Choose your plan</div>
               <div className="step-sub">Select an IPD tier and optional riders</div>
@@ -774,7 +947,7 @@ export default function PricingWizard() {
               )}
 
               <div className="btn-row">
-                <button className="btn btn-back" onClick={() => setStep(1)}>Back</button>
+                <button className="btn btn-back" onClick={() => setStep(2)}>Back</button>
                 <button className="btn btn-gold" onClick={() => calculate()} disabled={loading}>
                   {loading ? <><Spinner /> Calculating...</> : "Get my quote"}
                 </button>
@@ -782,8 +955,8 @@ export default function PricingWizard() {
             </div>
           )}
 
-          {/* STEP 4: QUOTE */}
-          {step === 3 && result && (
+          {/* STEP 5: QUOTE */}
+          {step === 4 && result && (
             <div className="step-content">
               <div className="res-hero">
                 <div className="res-label">Your annual premium — Cambodia</div>
@@ -831,7 +1004,7 @@ export default function PricingWizard() {
               </div>
 
               <div className="btn-row">
-                <button className="btn btn-back" onClick={() => setStep(2)}>Modify plan</button>
+                <button className="btn btn-back" onClick={() => setStep(3)}>Modify plan</button>
                 <button className="btn btn-next" onClick={() => { setStep(0); setResult(null); }}>New quote</button>
               </div>
             </div>
@@ -897,11 +1070,11 @@ const TOOLS = [
   },
   {
     name: "navigate_to_step",
-    description: "Navigate the wizard to a specific step. Steps: 0=Personal info, 1=Health info, 2=Plan selection, 3=Quote result.",
+    description: "Navigate the wizard to a specific step. Steps: 0=Personal info, 1=Health info, 2=Lifestyle, 3=Plan selection, 4=Quote result.",
     input_schema: {
       type: "object",
       properties: {
-        step: { type: "number", enum: [0, 1, 2, 3], description: "Step number to navigate to." }
+        step: { type: "number", enum: [0, 1, 2, 3, 4], description: "Step number to navigate to. 0=Personal info, 1=Health info, 2=Lifestyle, 3=Plan selection, 4=Quote result." }
       },
       required: ["step"]
     }
@@ -909,7 +1082,7 @@ const TOOLS = [
 ];
 
 const RIDER_NAMES = { include_opd: "OPD", include_dental: "Dental", include_maternity: "Maternity" };
-const STEP_NAMES = ["Personal info", "Health info", "Plan selection", "Quote result"];
+const STEP_NAMES = ["Personal info", "Health info", "Lifestyle", "Plan selection", "Quote result"];
 
 function AIChat({ inp, result, onSwitchTier, onToggleRider, onCalculateWith, onGoToStep }) {
   const [open, setOpen] = useState(false);
