@@ -208,16 +208,6 @@ export default function PricingWizard() {
   const [result, setResult] = useState(null);
   const [isLocal, setIsLocal] = useState(false);
   const [aiTip, setAiTip] = useState("");
-  const [prevQuote, setPrevQuote] = useState(null);
-
-  // Load previous quote from localStorage on mount
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem("dac_hp_last_quote");
-      if (saved) setPrevQuote(JSON.parse(saved));
-    } catch {}
-  }, []);
-
   const [inp, setInp] = useState({
     age: 35, gender: "Male", country: "cambodia", region: "Phnom Penh",
     smoking_status: "Never",
@@ -271,21 +261,6 @@ export default function PricingWizard() {
       res = localPrice(target); setResult(res); setIsLocal(true);
     } finally {
       setLoading(false); setStep(3);
-      // Save to localStorage for Renewal Advisor
-      if (res) {
-        try {
-          localStorage.setItem("dac_hp_last_quote", JSON.stringify({
-            date: new Date().toISOString(),
-            input: target,
-            premium: res.total_annual_premium,
-            monthly: res.total_monthly_premium,
-            tier: res.ipd_tier,
-            riders: Object.keys(res.riders || {}),
-            frequency: res.ipd_core?.frequency,
-            severity: res.ipd_core?.severity,
-          }));
-        } catch {}
-      }
     }
     return res;
   }, [inp]);
@@ -617,35 +592,6 @@ export default function PricingWizard() {
           {/* STEP 1: PROFILE */}
           {step === 0 && (
             <div className="step-content">
-              {/* Renewal Advisor — Welcome Back */}
-              {prevQuote && (() => {
-                const days = Math.floor((Date.now() - new Date(prevQuote.date).getTime()) / 86400000);
-                const ago = days === 0 ? "today" : days === 1 ? "yesterday" : days < 30 ? `${days} days ago` : days < 365 ? `${Math.floor(days/30)} months ago` : `${Math.floor(days/365)} years ago`;
-                return (
-                  <div style={{ background: "linear-gradient(135deg, var(--navy) 0%, #16213e 100%)", borderRadius: 12, padding: 20, marginBottom: 20, position: "relative", overflow: "hidden" }}>
-                    <div style={{ position: "absolute", top: -20, right: -10, width: 80, height: 80, borderRadius: "50%", background: "rgba(245,197,99,0.08)" }} />
-                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-                      <div style={{ width: 28, height: 28, borderRadius: "50%", background: "var(--gold)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                        <span style={{ fontSize: 12, fontWeight: 700, color: "var(--navy)" }}>AI</span>
-                      </div>
-                      <span style={{ color: "var(--gold)", fontSize: 12, fontWeight: 600, letterSpacing: 1, textTransform: "uppercase" }}>Renewal Advisor</span>
-                    </div>
-                    <p style={{ color: "white", fontSize: 15, fontWeight: 500, margin: "0 0 6px" }}>Welcome back!</p>
-                    <p style={{ color: "rgba(255,255,255,0.7)", fontSize: 13, lineHeight: 1.6, margin: 0 }}>
-                      Your last quote was <strong style={{ color: "var(--gold)" }}>{ago}</strong> — <strong style={{ color: "white" }}>${prevQuote.premium?.toLocaleString()}/year</strong> on {prevQuote.tier} tier.
-                      {prevQuote.riders?.length > 0 && ` With ${prevQuote.riders.join(", ")} rider${prevQuote.riders.length > 1 ? "s" : ""}.`}
-                      {" "}Update your details below to see how your premium has changed.
-                    </p>
-                    <button onClick={() => {
-                      if (prevQuote.input) {
-                        setInp(p => ({ ...p, ...prevQuote.input }));
-                      }
-                    }} style={{ marginTop: 10, background: "rgba(245,197,99,0.15)", border: "1px solid rgba(245,197,99,0.3)", color: "var(--gold)", padding: "6px 14px", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "var(--fb)" }}>
-                      Load previous profile
-                    </button>
-                  </div>
-                );
-              })()}
               <div className="step-title">Tell us about yourself</div>
               <div className="step-sub">Basic demographics for your insurance quote</div>
               <div className="card">
@@ -829,7 +775,7 @@ export default function PricingWizard() {
 
               <div className="btn-row">
                 <button className="btn btn-back" onClick={() => setStep(1)}>Back</button>
-                <button className="btn btn-gold" onClick={calculate} disabled={loading}>
+                <button className="btn btn-gold" onClick={() => calculate()} disabled={loading}>
                   {loading ? <><Spinner /> Calculating...</> : "Get my quote"}
                 </button>
               </div>
@@ -847,64 +793,6 @@ export default function PricingWizard() {
                   {result.ipd_tier} tier{Object.keys(result.riders || {}).length > 0 && ` + ${Object.keys(result.riders).join(", ")}`}
                 </div>
               </div>
-
-              {/* Renewal Advisor — Comparison */}
-              {prevQuote && result && (() => {
-                const diff = result.total_annual_premium - prevQuote.premium;
-                const pct = prevQuote.premium ? Math.round((diff / prevQuote.premium) * 100) : 0;
-                const changes = [];
-                if (prevQuote.input) {
-                  const pi = prevQuote.input;
-                  if (pi.age !== inp.age) changes.push({ factor: "Age", from: pi.age, to: inp.age, impact: inp.age > pi.age ? "increases" : "decreases" });
-                  if (pi.smoking_status !== inp.smoking_status) changes.push({ factor: "Smoking", from: pi.smoking_status, to: inp.smoking_status, impact: ["Never","Former","Current"].indexOf(inp.smoking_status) > ["Never","Former","Current"].indexOf(pi.smoking_status) ? "increases" : "decreases" });
-                  if (pi.exercise_frequency !== inp.exercise_frequency) changes.push({ factor: "Exercise", from: pi.exercise_frequency, to: inp.exercise_frequency });
-                  if (pi.ipd_tier !== inp.ipd_tier) changes.push({ factor: "Tier", from: pi.ipd_tier, to: inp.ipd_tier });
-                  const oldPE = (pi.preexist_conditions || []).filter(p => p !== "None").length;
-                  const newPE = inp.preexist_conditions.filter(p => p !== "None").length;
-                  if (oldPE !== newPE) changes.push({ factor: "Conditions", from: `${oldPE}`, to: `${newPE}`, impact: newPE > oldPE ? "increases" : "decreases" });
-                }
-                return (
-                  <div style={{ background: "linear-gradient(135deg, var(--navy) 0%, #16213e 100%)", borderRadius: 12, padding: 20, marginBottom: 20, position: "relative", overflow: "hidden" }}>
-                    <div style={{ position: "absolute", top: -20, right: -10, width: 80, height: 80, borderRadius: "50%", background: "rgba(245,197,99,0.08)" }} />
-                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-                      <div style={{ width: 28, height: 28, borderRadius: "50%", background: "var(--gold)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                        <span style={{ fontSize: 12, fontWeight: 700, color: "var(--navy)" }}>AI</span>
-                      </div>
-                      <span style={{ color: "var(--gold)", fontSize: 12, fontWeight: 600, letterSpacing: 1, textTransform: "uppercase" }}>Renewal Advisor</span>
-                    </div>
-                    <p style={{ color: "white", fontSize: 15, fontWeight: 500, margin: "0 0 8px" }}>Compared to your last quote</p>
-                    <div style={{ display: "flex", gap: 12, marginBottom: 12 }}>
-                      <div style={{ flex: 1, background: "rgba(255,255,255,0.06)", borderRadius: 8, padding: 12, textAlign: "center" }}>
-                        <div style={{ color: "rgba(255,255,255,0.5)", fontSize: 11, marginBottom: 4 }}>Previous</div>
-                        <div style={{ color: "white", fontSize: 18, fontWeight: 600 }}>${prevQuote.premium?.toLocaleString()}</div>
-                        <div style={{ color: "rgba(255,255,255,0.5)", fontSize: 11 }}>{prevQuote.tier}/yr</div>
-                      </div>
-                      <div style={{ display: "flex", alignItems: "center" }}><span style={{ color: diff > 0 ? "#f87171" : diff < 0 ? "#34d399" : "var(--gold)", fontSize: 20 }}>→</span></div>
-                      <div style={{ flex: 1, background: "rgba(255,255,255,0.06)", borderRadius: 8, padding: 12, textAlign: "center" }}>
-                        <div style={{ color: "rgba(255,255,255,0.5)", fontSize: 11, marginBottom: 4 }}>Current</div>
-                        <div style={{ color: "white", fontSize: 18, fontWeight: 600 }}>${result.total_annual_premium?.toLocaleString()}</div>
-                        <div style={{ color: "rgba(255,255,255,0.5)", fontSize: 11 }}>{result.ipd_tier}/yr</div>
-                      </div>
-                      <div style={{ flex: 1, background: diff > 0 ? "rgba(248,113,113,0.1)" : diff < 0 ? "rgba(52,211,153,0.1)" : "rgba(245,197,99,0.1)", borderRadius: 8, padding: 12, textAlign: "center", border: `1px solid ${diff > 0 ? "rgba(248,113,113,0.3)" : diff < 0 ? "rgba(52,211,153,0.3)" : "rgba(245,197,99,0.3)"}` }}>
-                        <div style={{ color: "rgba(255,255,255,0.5)", fontSize: 11, marginBottom: 4 }}>Change</div>
-                        <div style={{ color: diff > 0 ? "#f87171" : diff < 0 ? "#34d399" : "var(--gold)", fontSize: 18, fontWeight: 600 }}>{diff > 0 ? "+" : ""}{diff === 0 ? "$0" : `$${Math.abs(Math.round(diff))}`}</div>
-                        {diff !== 0 && <div style={{ color: diff > 0 ? "#f87171" : "#34d399", fontSize: 11 }}>{diff > 0 ? "+" : ""}{pct}%</div>}
-                      </div>
-                    </div>
-                    {changes.length > 0 && (
-                      <div style={{ borderTop: "1px solid rgba(255,255,255,0.08)", paddingTop: 10 }}>
-                        <p style={{ color: "rgba(255,255,255,0.5)", fontSize: 11, marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 }}>What changed</p>
-                        {changes.map((c, i) => (
-                          <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                            <span style={{ color: c.impact === "increases" ? "#f87171" : c.impact === "decreases" ? "#34d399" : "var(--gold)", fontSize: 13 }}>{c.impact === "increases" ? "▲" : c.impact === "decreases" ? "▼" : "●"}</span>
-                            <span style={{ color: "rgba(255,255,255,0.8)", fontSize: 13 }}>{c.factor}: <span style={{ color: "rgba(255,255,255,0.5)" }}>{c.from}</span> → <span style={{ color: "white", fontWeight: 500 }}>{c.to}</span></span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                );
-              })()}
 
               <div className="card">
                 {/* IPD Core */}
