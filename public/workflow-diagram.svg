@@ -106,7 +106,7 @@
 
   <!-- Both paths merge to result -->
   <path d="M580 308 L640 308" stroke="#f5a623" stroke-width="2" marker-end="url(#arr)"/>
-  <path d="M310 440 L310 470 L675 470 L675 450" stroke="#f5a623" stroke-width="2" marker-end="url(#arr)"/>
+  <path d="M310 440 L310 470 L720 470 L720 338" stroke="#f5a623" stroke-width="2" marker-end="url(#arr)"/>
   <rect x="640" y="278" width="160" height="60" rx="10" fill="#0d2b7a"/>
   <text x="720" y="303" text-anchor="middle" font-size="12" font-weight="700" fill="white">Premium Output</text>
   <text x="720" y="320" text-anchor="middle" font-size="10" fill="#94a3b8">Annual + monthly totals</text>
