@@ -358,7 +358,7 @@ export default function PricingWizard() {
           <div className="wizard" style={{ animation: "fadeIn .3s ease both", maxWidth: 680 }}>
             {/* Hero */}
             <div style={{ textAlign: "center", marginBottom: 32, paddingTop: 8 }}>
-              <Logo size={72} />
+              <Logo size={96} />
               <div style={{ fontSize: 26, fontWeight: 500, marginTop: 14, letterSpacing: -0.3 }}>About DAC HealthPrice</div>
               <div style={{ fontSize: 14, color: "var(--txt2)", marginTop: 6, lineHeight: 1.6, maxWidth: 440, margin: "6px auto 0" }}>
                 AI-powered hospital reimbursement insurance pricing for Cambodia
