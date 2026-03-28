@@ -12,10 +12,10 @@ function getBrowserId() {
   return id;
 }
 
-async function apiCall(path, body) {
+async function apiCall(path, body, extraHeaders = {}) {
   const opts = body
-    ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }
-    : {};
+    ? { method: "POST", headers: { "Content-Type": "application/json", ...extraHeaders }, body: JSON.stringify(body) }
+    : { headers: extraHeaders };
   const r = await fetch(`${API}${path}`, { ...opts, signal: AbortSignal.timeout(45000) });
   if (!r.ok) {
     const e = await r.json().catch(() => ({}));
@@ -275,6 +275,7 @@ export default function PricingWizard() {
     healthcare_proximity: "<5km",
     ipd_tier: "Silver", family_size: 1,
     include_opd: false, include_dental: false, include_maternity: false,
+    email: "",
   });
 
   // Derive exercise_frequency label from days*mins for backend compatibility
@@ -314,7 +315,8 @@ export default function PricingWizard() {
     setLoading(true); setResult(null); setIsLocal(false);
     let res;
     try {
-      res = await apiCall("/api/v2/price", { ...target, browser_id: getBrowserId() });
+      const session = await apiCall("/api/v2/session", { email: target.email || "", browser_id: getBrowserId() });
+      res = await apiCall("/api/v2/price", { ...target, browser_id: getBrowserId() }, { "X-Session-Token": session.token });
       setResult(res);
     } catch {
       res = localPrice(target); setResult(res); setIsLocal(true);
@@ -999,6 +1001,17 @@ export default function PricingWizard() {
                   <div className="card-label" style={{ marginBottom: 0 }}>Personal profile</div>
                   <button onClick={() => setStep(0)} style={{ background: "none", border: "1px solid var(--surf3)", borderRadius: 5, padding: "3px 10px", fontSize: 11, cursor: "pointer", color: "var(--txt3)", fontFamily: "var(--fb)" }}>Edit</button>
                 </div>
+                <div className="fg" style={{ marginBottom: 12 }}>
+                  <label className="fl">Email address <span style={{ color: "var(--danger)", fontWeight: 400, fontSize: 10 }}>* required for quote</span></label>
+                  <input
+                    className="fi"
+                    type="email"
+                    placeholder="your@email.com"
+                    value={inp.email || ""}
+                    onChange={e => u("email", e.target.value)}
+                    style={{ fontSize: 13 }}
+                  />
+                </div>
                 <div className="bk-row"><span className="bk-l">Age / Gender</span><span className="bk-v">{inp.age} / {inp.gender}</span></div>
                 <div className="bk-row"><span className="bk-l">Region</span><span className="bk-v">{inp.region}</span></div>
                 <div className="bk-row"><span className="bk-l">Marital status</span><span className="bk-v">{inp.marital_status}</span></div>
@@ -1054,7 +1067,7 @@ export default function PricingWizard() {
 
               <div className="btn-row">
                 <button className="btn btn-back" onClick={() => setStep(3)}>Back</button>
-                <button className="btn btn-gold" onClick={() => calculate()} disabled={loading || hasDecline}>
+                <button className="btn btn-gold" onClick={() => calculate()} disabled={loading || hasDecline || !inp.email || !inp.email.includes("@")}>
                   {loading ? <><Spinner /> Calculating…</> : hasDecline ? "Manual review required" : "Confirm & get quote →"}
                 </button>
               </div>
