@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 
-const API = "https://dac-healthprice-api.onrender.com";
+const API = "https://snowy-haze-f313.poungrotha01555.workers.dev";
 const LOGO_URL = "/DAC.png"; // Your logo in /public
 
 function getBrowserId() {
