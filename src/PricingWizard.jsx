@@ -49,6 +49,7 @@ const FB_FREQ = { ipd: 0.12, opd: 2.5, dental: 0.8, maternity: 0.15 };
 const FB_SEV = { ipd: 2500, opd: 60, dental: 120, maternity: 3500 };
 const TIER_F = { Bronze: 0.70, Silver: 1.00, Gold: 1.45, Platinum: 2.10 };
 const LOAD = { ipd: 0.30, opd: 0.25, dental: 0.20, maternity: 0.25 };
+const ULR_DEFAULTS = { Bronze: 0.70, Silver: 0.72, Gold: 0.75, Platinum: 0.78 };
 
 // ─── Local fallback pricing ─────────────────────────────────────────────────
 function localPrice(inp) {
@@ -81,7 +82,9 @@ function localPrice(inp) {
 
   const ipd = calc("ipd");
   const tf = TIER_F[inp.ipd_tier] || 1;
-  const ipd_loaded = Math.round(ipd.expected_annual_cost * (1 + LOAD.ipd) * tf * 100) / 100;
+  const ulr = inp.target_ulr ?? ULR_DEFAULTS[inp.ipd_tier] ?? 0.72;
+  const ulrLoading = (1 - ulr) / ulr;
+  const ipd_loaded = Math.round(ipd.expected_annual_cost * (1 + ulrLoading) * tf * 100) / 100;
   const ded_credit = Math.round(((TIERS[inp.ipd_tier]?.dedN || 0) * 0.10) * 100) / 100;
   const ipd_prem = Math.max(Math.round((ipd_loaded - ded_credit) * 100) / 100, 50);
 
@@ -90,7 +93,7 @@ function localPrice(inp) {
   for (const [cov, inc] of [["opd", inp.include_opd], ["dental", inp.include_dental], ["maternity", inp.include_maternity]]) {
     if (!inc) continue;
     const r = calc(cov);
-    const rp = Math.round(r.expected_annual_cost * (1 + LOAD[cov]) * 100) / 100;
+    const rp = Math.round(r.expected_annual_cost * (1 + ulrLoading) * 100) / 100;
     riders[cov] = { ...r, name: cov.toUpperCase() + " Rider", annual_premium: rp, monthly_premium: Math.round(rp / 12 * 100) / 100 };
     total += rp;
   }
@@ -267,6 +270,7 @@ input[type="range"]{height:6px;border-radius:3px;outline:none;cursor:pointer}
 // MAIN APP
 // ═══════════════════════════════════════════════════════════════════════════════
 export default function PricingWizard() {
+  const sessionTokenRef = useRef(null);
   const [step, setStep] = useState(0);
   const [apiOk, setApiOk] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -294,6 +298,7 @@ export default function PricingWizard() {
     healthcare_proximity: "<5km",
     ipd_tier: "Silver", family_size: 1,
     include_opd: false, include_dental: false, include_maternity: false,
+    target_ulr: ULR_DEFAULTS["Silver"],
     email: "",
   });
 
@@ -318,6 +323,7 @@ export default function PricingWizard() {
       const mins = k === "exercise_mins" ? v : next.exercise_mins;
       next.exercise_frequency = deriveExercise(days, mins);
     }
+    if (k === "ipd_tier") next.target_ulr = ULR_DEFAULTS[v] ?? 0.72;
     return next;
   });
 
@@ -335,6 +341,7 @@ export default function PricingWizard() {
     let res;
     try {
       const session = await apiCall("/api/v2/session", { email: target.email || "", browser_id: getBrowserId() });
+      sessionTokenRef.current = session.token;
       res = await apiCall("/api/v2/price", { ...target, browser_id: getBrowserId() }, { "X-Session-Token": session.token });
       setResult(res);
     } catch {
@@ -1007,6 +1014,39 @@ export default function PricingWizard() {
                 })}
               </div>
 
+              <div className="card">
+                <div className="card-label" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  Pricing basis
+                  <span title="Target Loss Ratio: % of premium expected to cover claims. Lower = more conservative pricing." style={{ width: 15, height: 15, borderRadius: "50%", background: "var(--surf3)", color: "var(--txt3)", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 9, fontWeight: 700, cursor: "help", flexShrink: 0 }}>?</span>
+                </div>
+                <div style={{ background: "var(--surf2)", borderRadius: "var(--r)", padding: 16 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                    <span style={{ fontSize: 12, color: "var(--txt2)" }}>Target Loss Ratio (ULR)</span>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: "var(--navy)" }}>{Math.round((inp.target_ulr ?? ULR_DEFAULTS[inp.ipd_tier]) * 100)}%</span>
+                  </div>
+                  <input type="range" min="50" max="95" step="5"
+                    value={Math.round((inp.target_ulr ?? ULR_DEFAULTS[inp.ipd_tier]) * 100)}
+                    onChange={e => u("target_ulr", parseInt(e.target.value) / 100)}
+                    style={{ width: "100%", accentColor: "var(--navy)", cursor: "pointer" }} />
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, color: "var(--txt3)", marginTop: 2 }}>
+                    <span>50% Conservative</span><span>95% Aggressive</span>
+                  </div>
+                  <div style={{ marginTop: 8, padding: "6px 10px", borderRadius: 6, background: "var(--gold-bg)", border: "1px solid var(--gold-bd)", fontSize: 11, color: "var(--txt2)", lineHeight: 1.5 }}>
+                    {(() => {
+                      const ulr = inp.target_ulr ?? ULR_DEFAULTS[inp.ipd_tier];
+                      const loading = Math.round((1 - ulr) / ulr * 100);
+                      const isDefault = ulr === ULR_DEFAULTS[inp.ipd_tier];
+                      return <>Implied loading: <strong style={{ color: "var(--navy)" }}>{loading}%</strong>
+                        {isDefault ? <span style={{ marginLeft: 6, color: "var(--ok)", fontSize: 10 }}>tier default</span>
+                                   : <span style={{ marginLeft: 6, color: "#c46800", fontSize: 10 }}>custom</span>}</>;
+                    })()}
+                  </div>
+                  <div style={{ marginTop: 6, fontSize: 11, color: "var(--txt3)", lineHeight: 1.5 }}>
+                    % of premium expected to cover claims. Lower = more conservative pricing, higher margin. Higher = lower margin, more competitive price.
+                  </div>
+                </div>
+              </div>
+
               {aiTip && (
                 <div className="ai-bar">
                   <div className="ai-dot">AI</div>
@@ -1183,6 +1223,36 @@ export default function PricingWizard() {
                 {isLocal && <div style={{ marginTop: 8, padding: "8px 12px", borderRadius: 8, background: "#fffbeb", border: "1px solid #fef3c7", color: "#92400e", fontSize: 11 }}>⚠ Local calculation (simplified factor model) — ML backend unavailable. This estimate may differ from the actuarial model result once connectivity is restored.</div>}
               </div>
 
+              {/* ULR analysis card */}
+              {result.ulr_analysis && (
+                <div className="card" style={{ marginBottom: 14 }}>
+                  <div className="card-label">Pricing basis</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
+                    <div style={{ padding: "10px 12px", borderRadius: 8, background: "var(--navy)", textAlign: "center" }}>
+                      <div style={{ fontSize: 10, color: "rgba(255,255,255,.55)", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 3 }}>Target ULR</div>
+                      <div style={{ fontSize: 22, fontWeight: 700, color: "var(--gold)" }}>{Math.round(result.ulr_analysis.target_ulr * 100)}%</div>
+                      <div style={{ fontSize: 10, color: "rgba(255,255,255,.45)", marginTop: 1 }}>loss ratio target</div>
+                    </div>
+                    <div style={{ padding: "10px 12px", borderRadius: 8, background: "var(--surf2)", textAlign: "center" }}>
+                      <div style={{ fontSize: 10, color: "var(--txt3)", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 3 }}>Implied Loading</div>
+                      <div style={{ fontSize: 22, fontWeight: 700, color: "var(--navy)" }}>{Math.round(result.ulr_analysis.implied_loading_pct * 100)}%</div>
+                      <div style={{ fontSize: 10, color: "var(--txt3)", marginTop: 1 }}>above pure premium</div>
+                    </div>
+                  </div>
+                  <div className="bk-row">
+                    <span className="bk-l">Pure premium (expected cost × tier)</span>
+                    <span className="bk-v">${result.ulr_analysis.pure_premium?.toLocaleString()}</span>
+                  </div>
+                  <div className="bk-row">
+                    <span className="bk-l">ULR-adjusted premium</span>
+                    <span className="bk-v hi">${result.ulr_analysis.ulr_adjusted_premium?.toLocaleString()}</span>
+                  </div>
+                  <div style={{ marginTop: 8, padding: "6px 10px", borderRadius: 6, background: "var(--surf2)", fontSize: 11, color: "var(--txt3)", lineHeight: 1.5 }}>
+                    A {Math.round(result.ulr_analysis.target_ulr * 100)}% target ULR means {Math.round(result.ulr_analysis.target_ulr * 100)}¢ of every premium dollar covers claims, with {Math.round(result.ulr_analysis.implied_loading_pct * 100)}¢ retained for expenses and profit.
+                  </div>
+                </div>
+              )}
+
               {/* Value stack — product & service differentiation */}
               <div className="card" style={{ marginTop: 14 }}>
                 <div className="card-label">Why customers choose DAC</div>
@@ -1235,6 +1305,7 @@ export default function PricingWizard() {
         <AIChat
           inp={inp}
           result={result}
+          sessionToken={sessionTokenRef}
           onSwitchTier={tier => u("ipd_tier", tier)}
           onToggleRider={(rider, on) => u(rider, on)}
           onCalculateWith={calculate}
@@ -1303,7 +1374,7 @@ const TOOLS = [
 const RIDER_NAMES = { include_opd: "OPD", include_dental: "Dental", include_maternity: "Maternity" };
 const STEP_NAMES = ["Personal info", "Health info", "Lifestyle", "Plan selection", "Review & confirm", "Quote result"];
 
-function AIChat({ inp, result, onSwitchTier, onToggleRider, onCalculateWith, onGoToStep }) {
+function AIChat({ inp, result, sessionToken, onSwitchTier, onToggleRider, onCalculateWith, onGoToStep }) {
   const [open, setOpen] = useState(false);
   const [msgs, setMsgs] = useState([
     { role: "bot", text: "Hi! I'm your AI advisor. Once you have a quote, I can help you optimize your plan — switch tiers, add riders, explain your premium, or recalculate. You can also ask me questions at any step." }
@@ -1385,13 +1456,11 @@ function AIChat({ inp, result, onSwitchTier, onToggleRider, onCalculateWith, onG
       let iterations = 0;
       while (iterations < 5) {
         iterations++;
-        const r = await fetch("https://api.anthropic.com/v1/messages", {
+        const r = await fetch(`${API}/api/v2/chat`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "x-api-key": import.meta.env.VITE_ANTHROPIC_KEY,
-            "anthropic-version": "2023-06-01",
-            "anthropic-dangerous-direct-browser-access": "true",
+            "X-Session-Token": sessionToken.current || "",
           },
           body: JSON.stringify({
             model: "claude-sonnet-4-20250514",
