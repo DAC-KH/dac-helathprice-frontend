@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import PricingWizard from "./PricingWizard";
+import InsuranceDashboard from "./InsuranceDashboard";
 
 
 const API_URL = "https://dac-healthprice-api.onrender.com";
@@ -159,7 +160,7 @@ export default function App() {
       {page === "Pricing" && <PricingPage />}
       {page === "About" && <AboutPage />}
       {page === "Contact" && <ContactPage />}
-      {page === "Admin" && <AdminPage />}
+      {page === "Admin" && <InsuranceDashboard />}
 
       {/* ═══ FOOTER ═══ */}
       <footer style={{ background: NAVY_D, color: GRAY, padding: "64px 24px 32px" }}>
