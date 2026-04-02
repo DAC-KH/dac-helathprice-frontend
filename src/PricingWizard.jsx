@@ -102,7 +102,7 @@ function localPrice(inp) {
   total = Math.round(total * ff * 100) / 100;
 
   return {
-    quote_id: `LOCAL-${Date.now()}`, model_version: "local", ipd_tier: inp.ipd_tier,
+    quote_id: `LOCAL-${Date.now()}`, model_version: "local", model_source: "fallback", model_accuracy_pct: 75, ipd_tier: inp.ipd_tier,
     tier_benefits: TIERS[inp.ipd_tier],
     ipd_core: { ...ipd, annual_premium: ipd_prem, monthly_premium: Math.round(ipd_prem / 12 * 100) / 100, tier_factor: tf, deductible_credit: ded_credit, loading_pct: LOAD.ipd, source: "local" },
     riders, family_size: inp.family_size, family_factor: Math.round(ff * 100) / 100,
@@ -1212,15 +1212,30 @@ export default function PricingWizard() {
                 </div>
 
                 <div className="qid"><span>Quote ID</span><code>{result.quote_id}</code></div>
-                <div className="qid" style={{ marginTop: 4 }}><span>Model version</span><code>{result.model_version || "local"}</code></div>
-                <div style={{ marginTop: 10, padding: "6px 10px", borderRadius: 6, background: "var(--surf2)", display: "flex", alignItems: "center", gap: 6, fontSize: 10, color: "var(--txt3)" }}>
+                <div style={{ marginTop: 8 }}>
+                  {result.model_source === "ml" ? (
+                    <div style={{ padding: "7px 12px", borderRadius: 6, background: "var(--navy)", border: "1px solid rgba(245,197,99,0.25)", display: "flex", alignItems: "center", gap: 8, fontSize: 11 }}>
+                      <span style={{ color: "var(--gold)", fontWeight: 700 }}>ML Model</span>
+                      <span style={{ color: "rgba(255,255,255,0.35)" }}>·</span>
+                      <span style={{ color: "rgba(255,255,255,0.75)" }}>Accuracy: {result.model_accuracy_pct}%</span>
+                      <span style={{ color: "rgba(255,255,255,0.35)" }}>·</span>
+                      <span style={{ color: "rgba(255,255,255,0.4)", fontSize: 10 }}>{result.model_version}</span>
+                    </div>
+                  ) : (
+                    <div style={{ padding: "7px 12px", borderRadius: 6, background: "#fffbeb", border: "1px solid #fef3c7", display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "#92400e" }}>
+                      <span style={{ fontWeight: 700 }}>⚠ Fallback estimate</span>
+                      <span style={{ opacity: 0.5 }}>·</span>
+                      <span>Simplified factor model — may differ from ML result once connectivity is restored</span>
+                    </div>
+                  )}
+                </div>
+                <div style={{ marginTop: 8, padding: "6px 10px", borderRadius: 6, background: "var(--surf2)", display: "flex", alignItems: "center", gap: 6, fontSize: 10, color: "var(--txt3)" }}>
                   <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
                   Quote logged to audit trail · {new Date().toLocaleString()}
                 </div>
                 <div style={{ marginTop: 8, padding: "8px 12px", borderRadius: 6, background: "var(--surf2)", fontSize: 11, color: "var(--txt3)", lineHeight: 1.6 }}>
                   ℹ The breakdown above shows relative coverage composition. Your exact premium is personalised to your 20+ risk factors and confirmed in writing at policy issuance.
                 </div>
-                {isLocal && <div style={{ marginTop: 8, padding: "8px 12px", borderRadius: 8, background: "#fffbeb", border: "1px solid #fef3c7", color: "#92400e", fontSize: 11 }}>⚠ Local calculation (simplified factor model) — ML backend unavailable. This estimate may differ from the actuarial model result once connectivity is restored.</div>}
               </div>
 
               {/* ULR analysis card */}
