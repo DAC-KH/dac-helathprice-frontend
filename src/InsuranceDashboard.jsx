@@ -19,6 +19,7 @@ const ERR          = "#ef4444";
 const REGIONS      = ["Phnom Penh","Siem Reap","Battambang","Sihanoukville","Kampong Cham","Rural Areas"];
 const OCCUPATIONS  = ["Office/Desk","Retail/Service","Healthcare","Manual Labor","Industrial/High-Risk","Retired"];
 const SMOKING_LIST = ["Never","Former","Current"];
+const COV_LABELS   = { ipd: "IPD", opd: "OPD", dental: "Dental", maternity: "Maternity" };
 
 // ── Coefficient store (GLM) ───────────────────────────────────────────────────
 const COEFF = {
@@ -1647,6 +1648,106 @@ function runPortfolioOptimizer(personas, constraints, optimizeParams) {
   return { top5, sensitivityData, feasibleCount: feasible.length };
 }
 
+// ── Claims Scenario Simulator ─────────────────────────────────────────────────
+function runClaimsSimulation(shocks, personas) {
+  const { freqShock, sevShock, catEvents, portfolioSize } = shocks;
+  const covs = ["ipd", "opd", "dental", "maternity"];
+
+  const totalWeight = personas.reduce((s, p) => s + p.weight, 0);
+  const normalized  = personas.map(p => ({ ...p, w: p.weight / totalWeight }));
+
+  const baselineClaims = {}, baselinePayout = {}, shockedClaims = {}, shockedPayout = {}, premiumPool = {};
+  for (const cov of covs) {
+    baselineClaims[cov] = 0; baselinePayout[cov] = 0;
+    shockedClaims[cov]  = 0; shockedPayout[cov]  = 0;
+    premiumPool[cov]    = 0;
+  }
+
+  for (const p of normalized) {
+    const ab = ageBand(p.age);
+    const af = COEFF.age[ab]              || 1;
+    const sf = COEFF.smoke[p.smoking]     || 1;
+    const of = COEFF.occup[p.occupation]  || 1;
+    const rf = COEFF.region[p.region]     || 1;
+    const ff = 1 + (p.dependents - 1) * COEFF.famPer;
+    const policyWeight = p.w * portfolioSize;
+
+    // Get loaded premiums from the standard engine for the premium pool
+    const quote = computeQuote(p);
+
+    for (const cov of covs) {
+      if (cov !== "ipd" && !p[cov]) continue; // rider not included for this persona
+
+      const { freq, sev } = COEFF.base[cov];
+      const efFreq = freq * af * sf * of * rf;
+      const efSev  = sev  * (1 + Math.max(0, p.age - 30) * 0.006);
+      const fShock = freqShock[cov] ?? 1;
+      const sShock = sevShock[cov]  ?? 1;
+
+      baselineClaims[cov] += policyWeight * efFreq;
+      baselinePayout[cov] += policyWeight * efFreq * efSev * ff;
+      shockedClaims[cov]  += policyWeight * efFreq * fShock;
+      shockedPayout[cov]  += policyWeight * efFreq * fShock * efSev * sShock * ff;
+
+      if (cov === "ipd") {
+        premiumPool[cov] += policyWeight * (quote.ipd?.annual || 0);
+      } else {
+        premiumPool[cov] += policyWeight * (quote.riders?.[cov]?.annual || 0);
+      }
+    }
+  }
+
+  // Cat events: add flat extra claims at weighted-average shocked severity
+  for (const ev of catEvents) {
+    const cov = ev.coverage;
+    let totalSev = 0, totalW = 0;
+    for (const p of normalized) {
+      if (cov !== "ipd" && !p[cov]) continue;
+      const { sev } = COEFF.base[cov];
+      const efSev  = sev * (1 + Math.max(0, p.age - 30) * 0.006);
+      const ff     = 1 + (p.dependents - 1) * COEFF.famPer;
+      const sShock = sevShock[cov] ?? 1;
+      totalSev += p.w * efSev * ff * sShock;
+      totalW   += p.w;
+    }
+    const avgSev = totalW > 0 ? totalSev / totalW : COEFF.base[cov].sev;
+    shockedClaims[cov] += ev.extraClaims;
+    shockedPayout[cov] += ev.extraClaims * avgSev;
+  }
+
+  // Loss ratios
+  const baselineLR = {}, shockedLR = {};
+  for (const cov of covs) {
+    baselineLR[cov] = premiumPool[cov] > 0 ? baselinePayout[cov] / premiumPool[cov] : null;
+    shockedLR[cov]  = premiumPool[cov] > 0 ? shockedPayout[cov]  / premiumPool[cov] : null;
+  }
+
+  const totalBasePayout    = Object.values(baselinePayout).reduce((a, b) => a + b, 0);
+  const totalShockedPayout = Object.values(shockedPayout).reduce((a, b) => a + b, 0);
+  const totalPremiumPool   = Object.values(premiumPool).reduce((a, b) => a + b, 0);
+
+  return {
+    coverages: covs,
+    baseline: {
+      claims: baselineClaims, payout: baselinePayout, lossRatio: baselineLR,
+      totalPayout: totalBasePayout, totalPremium: totalPremiumPool,
+      totalLossRatio: totalPremiumPool > 0 ? totalBasePayout / totalPremiumPool : 0,
+    },
+    shocked: {
+      claims: shockedClaims, payout: shockedPayout, lossRatio: shockedLR,
+      totalPayout: totalShockedPayout, totalPremium: totalPremiumPool,
+      totalLossRatio: totalPremiumPool > 0 ? totalShockedPayout / totalPremiumPool : 0,
+    },
+    delta: {
+      payout:    totalShockedPayout - totalBasePayout,
+      payoutPct: totalBasePayout > 0 ? (totalShockedPayout - totalBasePayout) / totalBasePayout : 0,
+      lossRatio: totalPremiumPool > 0
+        ? (totalShockedPayout - totalBasePayout) / totalPremiumPool
+        : 0,
+    },
+  };
+}
+
 // ── Policy Optimizer Tab ───────────────────────────────────────────────────────
 function PolicyOptimizerTab() {
   const [constraints, setConstraints] = useState({ targetMargin: 15, minPremium: 200, maxPremium: 2000, premiumTier: "Silver" });
@@ -1877,6 +1978,366 @@ function SensitivityChart({ sensitivityData, targetMargin }) {
   );
 }
 
+// ── Loss Ratio Bar Chart ──────────────────────────────────────────────────────
+function LossRatioChart({ baseline, shocked, coverages }) {
+  const W = 560, H = 240, ML = 55, MR = 20, MT = 28, MB = 50;
+  const PW = W - ML - MR, PH = H - MT - MB;
+
+  const allVals = [
+    ...coverages.map(c => baseline[c] || 0),
+    ...coverages.map(c => shocked[c]  || 0),
+    1.5,
+  ];
+  const yMax  = Math.max(...allVals) * 1.1;
+  const yScale = (v) => MT + ((yMax - v) / yMax) * PH;
+
+  const groupW = PW / 4;
+  const barW   = groupW * 0.28;
+
+  const yTicks = [];
+  for (let v = 0; v <= yMax * 1.01; v += 0.25) yTicks.push(+v.toFixed(2));
+
+  return (
+    <div style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: 16, backgroundColor: "#fafafa" }}>
+      <h3 style={{ margin: "0 0 12px 0", fontSize: 14, fontWeight: 600, color: NAVY }}>Loss Ratio by Coverage Type</h3>
+      <svg width={W} height={H} style={{ backgroundColor: "white", borderRadius: 4, display: "block" }}>
+        {/* Horizontal gridlines */}
+        {yTicks.map(v => (
+          <line key={`hg-${v}`} x1={ML} y1={yScale(v)} x2={ML + PW} y2={yScale(v)}
+                stroke="#e5e7eb" strokeDasharray="4" strokeWidth={1} />
+        ))}
+
+        {/* Break-even line at 100% */}
+        <line x1={ML} y1={yScale(1.0)} x2={ML + PW} y2={yScale(1.0)}
+              stroke={GOLD_D} strokeDasharray="6 3" strokeWidth={1.5} />
+        <text x={ML + PW + 3} y={yScale(1.0) + 4} fontSize={9} fill={GOLD_D}>100%</text>
+
+        {/* Bars + labels */}
+        {coverages.map((cov, i) => {
+          const bVal = baseline[cov] ?? 0;
+          const sVal = shocked[cov]  ?? 0;
+          const bX   = ML + i * groupW + groupW * 0.12;
+          const sX   = bX + barW + 3;
+          const bY   = yScale(Math.min(bVal, yMax));
+          const sY   = yScale(Math.min(sVal, yMax));
+          const bH   = Math.max(yScale(0) - bY, 2);
+          const sH   = Math.max(yScale(0) - sY, 2);
+          const sColor = sVal > 1.0 ? ERR : sVal > 0.85 ? GOLD_D : OK;
+          return (
+            <g key={cov}>
+              <rect x={bX} y={bY} width={barW} height={bH} fill={NAVY} opacity={0.75} />
+              <rect x={sX} y={sY} width={barW} height={sH} fill={sColor} opacity={0.85} />
+              {bVal > 0 && <text x={bX + barW / 2} y={bY - 4} textAnchor="middle" fontSize={9} fill={NAVY}>{(bVal * 100).toFixed(0)}%</text>}
+              {sVal > 0 && <text x={sX + barW / 2} y={sY - 4} textAnchor="middle" fontSize={9} fill={sColor}>{(sVal * 100).toFixed(0)}%</text>}
+              <text x={ML + i * groupW + groupW / 2} y={H - 10} textAnchor="middle" fontSize={11} fill={TXT2}>{COV_LABELS[cov]}</text>
+            </g>
+          );
+        })}
+
+        {/* Y-axis ticks */}
+        {yTicks.map(v => (
+          <text key={`yt-${v}`} x={ML - 6} y={yScale(v) + 4} textAnchor="end" fontSize={10} fill="#666">
+            {Math.round(v * 100)}%
+          </text>
+        ))}
+
+        {/* Axis lines */}
+        <line x1={ML} y1={MT} x2={ML} y2={MT + PH} stroke="#333" strokeWidth={1} />
+        <line x1={ML} y1={MT + PH} x2={ML + PW} y2={MT + PH} stroke="#333" strokeWidth={1} />
+
+        {/* Legend */}
+        <rect x={ML + PW - 118} y={MT + 4} width={10} height={10} fill={NAVY} opacity={0.75} />
+        <text x={ML + PW - 104} y={MT + 13} fontSize={10} fill={TXT2}>Baseline</text>
+        <rect x={ML + PW - 50} y={MT + 4} width={10} height={10} fill={GOLD_D} opacity={0.85} />
+        <text x={ML + PW - 36} y={MT + 13} fontSize={10} fill={TXT2}>Shocked</text>
+      </svg>
+    </div>
+  );
+}
+
+// ── Claims Simulator Tab ──────────────────────────────────────────────────────
+function ClaimsSimulatorTab() {
+  const DEFAULT_SHOCKS = {
+    freqShock: { ipd: 1.0, opd: 1.0, dental: 1.0, maternity: 1.0 },
+    sevShock:  { ipd: 1.0, opd: 1.0, dental: 1.0, maternity: 1.0 },
+    catEvents: [],
+    portfolioSize: 1000,
+  };
+
+  const [shocks,       setShocks]       = useState(DEFAULT_SHOCKS);
+  const [scenarioType, setScenarioType] = useState("frequency");
+  const [catRegion,    setCatRegion]    = useState("Phnom Penh");
+  const [catCoverage,  setCatCoverage]  = useState("ipd");
+  const [catCount,     setCatCount]     = useState(100);
+  const [simResult,    setSimResult]    = useState(null);
+  const [isRunning,    setIsRunning]    = useState(false);
+
+  const applyPreset = (key) => {
+    const sz = shocks.portfolioSize;
+    const presets = {
+      ipd_freq_30:  { type: "frequency", shocks: { ...DEFAULT_SHOCKS, freqShock: { ipd: 1.30, opd: 1.0, dental: 1.0, maternity: 1.0 }, portfolioSize: sz } },
+      ded_bronze:   { type: "severity",  shocks: { ...DEFAULT_SHOCKS, sevShock:  { ipd: 1.10, opd: 1.05, dental: 1.0, maternity: 1.0 }, portfolioSize: sz } },
+      cat_outbreak: { type: "cat",       shocks: { ...DEFAULT_SHOCKS, catEvents: [{ region: "Phnom Penh", coverage: "ipd", extraClaims: 200 }], portfolioSize: sz } },
+    };
+    const p = presets[key]; if (!p) return;
+    setScenarioType(p.type);
+    setShocks(p.shocks);
+    if (key === "cat_outbreak") { setCatRegion("Phnom Penh"); setCatCoverage("ipd"); setCatCount(200); }
+    setSimResult(null);
+  };
+
+  const addCatEvent = () =>
+    setShocks(s => ({ ...s, catEvents: [...s.catEvents, { region: catRegion, coverage: catCoverage, extraClaims: +catCount }] }));
+
+  const removeCatEvent = (idx) =>
+    setShocks(s => ({ ...s, catEvents: s.catEvents.filter((_, i) => i !== idx) }));
+
+  const handleRun = () => {
+    setIsRunning(true);
+    setTimeout(() => {
+      setSimResult(runClaimsSimulation(shocks, MODEL_OFFICE));
+      setIsRunning(false);
+    }, 50);
+  };
+
+  const showFreq = scenarioType === "frequency" || scenarioType === "combined";
+  const showSev  = scenarioType === "severity"  || scenarioType === "combined";
+
+  const sliderRow = (label, val, onChange) => (
+    <div key={label}>
+      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+        <span style={{ fontSize: 12, color: TXT }}>{label}</span>
+        <span style={{ fontSize: 12, fontWeight: 700, color: val > 1 ? ERR : val < 1 ? OK : TXT2 }}>
+          ×{val.toFixed(2)} ({val >= 1 ? "+" : ""}{((val - 1) * 100).toFixed(0)}%)
+        </span>
+      </div>
+      <input type="range" min={0.5} max={3.0} step={0.05} value={val} onChange={e => onChange(+e.target.value)}
+             style={{ width: "100%" }} />
+    </div>
+  );
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
+
+      {/* ── Scenario Builder ── */}
+      <div style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: 16, backgroundColor: "#fafafa" }}>
+        <h3 style={{ margin: "0 0 16px 0", fontSize: 16, fontWeight: 600, color: NAVY }}>Scenario Builder</h3>
+
+        {/* Presets */}
+        <div style={{ marginBottom: 20 }}>
+          <p style={{ margin: "0 0 8px 0", fontSize: 12, fontWeight: 600, color: TXT2 }}>Quick presets:</p>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {[
+              { key: "ipd_freq_30",  label: "IPD +30% freq" },
+              { key: "ded_bronze",   label: "Bronze deductible −50%" },
+              { key: "cat_outbreak", label: "Hospital outbreak PP (200 IPD)" },
+            ].map(({ key, label }) => (
+              <button key={key} onClick={() => applyPreset(key)}
+                style={{ padding: "6px 12px", fontSize: 12, border: `1px solid ${NAVY}`, borderRadius: 6, background: WHITE, color: NAVY, cursor: "pointer", fontFamily: "inherit" }}>
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Scenario type */}
+        <div style={{ marginBottom: 16 }}>
+          <p style={{ margin: "0 0 8px 0", fontSize: 12, fontWeight: 600, color: TXT2 }}>Scenario type:</p>
+          <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+            {[
+              { id: "frequency", label: "Frequency Shock" },
+              { id: "severity",  label: "Severity Shock"  },
+              { id: "combined",  label: "Combined Stress"  },
+              { id: "cat",       label: "Cat Event"        },
+            ].map(({ id, label }) => (
+              <button key={id} onClick={() => { setScenarioType(id); setSimResult(null); }}
+                style={{ padding: "7px 14px", fontSize: 12, fontWeight: 600, fontFamily: "inherit", border: "none", borderRadius: 6, cursor: "pointer",
+                  background: scenarioType === id ? NAVY : LTGRAY, color: scenarioType === id ? WHITE : TXT2 }}>
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Portfolio size */}
+        <div style={{ marginBottom: 16 }}>
+          <label style={{ display: "flex", flexDirection: "column", gap: 6, maxWidth: 240 }}>
+            <span style={{ fontSize: 12, fontWeight: 600, color: TXT2 }}>Portfolio size (policyholders)</span>
+            <input type="number" min={100} max={100000} step={100} value={shocks.portfolioSize}
+              onChange={e => setShocks(s => ({ ...s, portfolioSize: Math.max(1, +e.target.value) }))}
+              style={{ padding: "8px 10px", border: "1px solid #ddd", borderRadius: 4 }} />
+          </label>
+        </div>
+
+        {/* Frequency sliders */}
+        {showFreq && (
+          <div style={{ marginBottom: 16 }}>
+            <p style={{ margin: "0 0 10px 0", fontSize: 12, fontWeight: 600, color: TXT2 }}>Frequency shock multiplier (claims per year):</p>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 12 }}>
+              {["ipd","opd","dental","maternity"].map(cov =>
+                sliderRow(COV_LABELS[cov], shocks.freqShock[cov],
+                  v => setShocks(s => ({ ...s, freqShock: { ...s.freqShock, [cov]: v } })))
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Severity sliders */}
+        {showSev && (
+          <div style={{ marginBottom: 16 }}>
+            <p style={{ margin: "0 0 10px 0", fontSize: 12, fontWeight: 600, color: TXT2 }}>Severity shock multiplier (cost per claim):</p>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 12 }}>
+              {["ipd","opd","dental","maternity"].map(cov =>
+                sliderRow(COV_LABELS[cov], shocks.sevShock[cov],
+                  v => setShocks(s => ({ ...s, sevShock: { ...s.sevShock, [cov]: v } })))
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Cat event builder */}
+        {scenarioType === "cat" && (
+          <div style={{ marginBottom: 16 }}>
+            <p style={{ margin: "0 0 10px 0", fontSize: 12, fontWeight: 600, color: TXT2 }}>Add catastrophe event:</p>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
+              <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <span style={{ fontSize: 11, color: TXT2 }}>Region</span>
+                <select value={catRegion} onChange={e => setCatRegion(e.target.value)}
+                  style={{ padding: "7px 10px", border: "1px solid #ddd", borderRadius: 4, fontSize: 12 }}>
+                  {REGIONS.map(r => <option key={r} value={r}>{r}</option>)}
+                </select>
+              </label>
+              <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <span style={{ fontSize: 11, color: TXT2 }}>Coverage</span>
+                <select value={catCoverage} onChange={e => setCatCoverage(e.target.value)}
+                  style={{ padding: "7px 10px", border: "1px solid #ddd", borderRadius: 4, fontSize: 12 }}>
+                  {["ipd","opd","dental","maternity"].map(c => <option key={c} value={c}>{COV_LABELS[c]}</option>)}
+                </select>
+              </label>
+              <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <span style={{ fontSize: 11, color: TXT2 }}>Extra claims</span>
+                <input type="number" min={0} max={10000} step={10} value={catCount}
+                  onChange={e => setCatCount(+e.target.value)}
+                  style={{ padding: "7px 10px", border: "1px solid #ddd", borderRadius: 4, width: 100, fontSize: 12 }} />
+              </label>
+              <button onClick={addCatEvent}
+                style={{ padding: "8px 14px", fontSize: 12, background: NAVY, color: WHITE, border: "none", borderRadius: 6, cursor: "pointer", fontFamily: "inherit" }}>
+                + Add Event
+              </button>
+            </div>
+            {shocks.catEvents.length > 0 && (
+              <div style={{ marginTop: 12 }}>
+                {shocks.catEvents.map((ev, idx) => (
+                  <span key={idx} style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "4px 10px", borderRadius: 20, background: "#fee2e2", fontSize: 12, color: "#991b1b", marginRight: 8, marginBottom: 6 }}>
+                    {ev.extraClaims} {COV_LABELS[ev.coverage]} in {ev.region}
+                    <button onClick={() => removeCatEvent(idx)}
+                      style={{ background: "none", border: "none", cursor: "pointer", color: "#991b1b", fontSize: 14, lineHeight: 1, padding: 0 }}>×</button>
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Run */}
+        <button onClick={handleRun} disabled={isRunning}
+          style={{ padding: "10px 24px", fontSize: 14, fontWeight: 600, fontFamily: "inherit",
+            background: isRunning ? TXT2 : GOLD_D, color: WHITE, border: "none", borderRadius: 8,
+            cursor: isRunning ? "not-allowed" : "pointer" }}>
+          {isRunning ? "Running…" : "Run Simulation"}
+        </button>
+      </div>
+
+      {/* ── Results ── */}
+      {simResult && (
+        <>
+          {/* Stat cards */}
+          <div className="dash-grid-2" style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 16 }}>
+            {[
+              { label: "Shocked Portfolio Payout",  value: `$${Math.round(simResult.shocked.totalPayout).toLocaleString()}`,  sub: `${shocks.portfolioSize.toLocaleString()} policyholders`, color: NAVY },
+              { label: "Baseline Portfolio Payout", value: `$${Math.round(simResult.baseline.totalPayout).toLocaleString()}`, sub: "at current rates", color: TXT2 },
+              { label: "Portfolio Loss Ratio",
+                value: `${(simResult.shocked.totalLossRatio * 100).toFixed(1)}%`,
+                sub: "shocked scenario",
+                color: simResult.shocked.totalLossRatio > 1.0 ? ERR : simResult.shocked.totalLossRatio < 0.85 ? OK : GOLD_D },
+              { label: "Delta vs Baseline",
+                value: `${simResult.delta.payoutPct >= 0 ? "+" : ""}${(simResult.delta.payoutPct * 100).toFixed(1)}%`,
+                sub: `$${Math.round(Math.abs(simResult.delta.payout)).toLocaleString()} ${simResult.delta.payout >= 0 ? "more" : "less"}`,
+                color: simResult.delta.payout > 0 ? ERR : OK },
+            ].map(({ label, value, sub, color }) => (
+              <div key={label} style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: 16, backgroundColor: WHITE }}>
+                <div style={{ fontSize: 11, color: TXT2, marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 }}>{label}</div>
+                <div style={{ fontSize: 24, fontWeight: 700, color }}>{value}</div>
+                <div style={{ fontSize: 11, color: TXT2, marginTop: 4 }}>{sub}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Per-coverage table */}
+          <div style={{ border: "1px solid #e5e7eb", borderRadius: 8, backgroundColor: WHITE, overflow: "hidden" }}>
+            <div style={{ padding: "14px 16px", borderBottom: "1px solid #e5e7eb" }}>
+              <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600, color: NAVY }}>Per-Coverage Breakdown</h3>
+            </div>
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                <thead>
+                  <tr style={{ backgroundColor: LTGRAY }}>
+                    {["Coverage","Baseline Claims","Shocked Claims","Baseline Payout","Shocked Payout","Loss Ratio","LR Change"].map(h => (
+                      <th key={h} style={{ padding: "10px 14px", textAlign: "left", fontSize: 11, fontWeight: 600, color: TXT2 }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {simResult.coverages.map(cov => {
+                    const bC  = simResult.baseline.claims[cov];
+                    const sC  = simResult.shocked.claims[cov];
+                    const bP  = simResult.baseline.payout[cov];
+                    const sP  = simResult.shocked.payout[cov];
+                    const bLR = simResult.baseline.lossRatio[cov];
+                    const sLR = simResult.shocked.lossRatio[cov];
+                    const lrDelta = (sLR !== null && bLR !== null) ? sLR - bLR : null;
+                    const lrColor = sLR === null ? TXT2 : sLR > 1.0 ? ERR : sLR > 0.85 ? GOLD_D : OK;
+                    return (
+                      <tr key={cov} style={{ borderBottom: "1px solid #f3f4f6" }}>
+                        <td style={{ padding: "10px 14px" }}>
+                          <span style={{ padding: "2px 8px", borderRadius: 20, fontSize: 11, background: LTGRAY, color: NAVY, fontWeight: 600 }}>{COV_LABELS[cov]}</span>
+                        </td>
+                        <td style={{ padding: "10px 14px", color: TXT2 }}>{Math.round(bC).toLocaleString()}</td>
+                        <td style={{ padding: "10px 14px", fontWeight: 600, color: sC > bC ? ERR : OK }}>{Math.round(sC).toLocaleString()}</td>
+                        <td style={{ padding: "10px 14px", color: TXT2 }}>${Math.round(bP).toLocaleString()}</td>
+                        <td style={{ padding: "10px 14px" }}>
+                          <span style={{ fontWeight: 600, color: sP > bP ? ERR : OK }}>${Math.round(sP).toLocaleString()}</span>
+                          {bP > 0 && <span style={{ fontSize: 11, color: TXT2, marginLeft: 4 }}>({sP >= bP ? "+" : ""}{(((sP - bP) / bP) * 100).toFixed(1)}%)</span>}
+                        </td>
+                        <td style={{ padding: "10px 14px", fontWeight: 700, color: lrColor }}>
+                          {sLR !== null ? `${(sLR * 100).toFixed(1)}%` : "N/A"}
+                        </td>
+                        <td style={{ padding: "10px 14px", color: lrDelta === null ? TXT2 : lrDelta > 0 ? ERR : OK }}>
+                          {lrDelta !== null ? `${lrDelta > 0 ? "+" : ""}${(lrDelta * 100).toFixed(1)} pp` : "—"}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Chart */}
+          <LossRatioChart baseline={simResult.baseline.lossRatio} shocked={simResult.shocked.lossRatio} coverages={simResult.coverages} />
+
+          {/* Methodology note */}
+          <div style={{ padding: "12px 14px", borderRadius: 8, background: "#f0f4ff", borderLeft: `4px solid ${NAVY}` }}>
+            <div style={{ fontSize: 11, color: TXT2, lineHeight: 1.6 }}>
+              <strong>Methodology:</strong> Shocks are multiplicative perturbations to frequency E[N] and/or severity E[X] parameters of the Poisson-Gamma model. Portfolio loss ratio = Σ(shocked payout) / Σ(premium pool) across {MODEL_OFFICE.length} representative personas weighted by portfolio distribution. Cat events inject flat additional claims at weighted-average shocked severity. Collective risk model: E[S] = Σ<sub>i</sub> w<sub>i</sub> · N · E[N<sub>i</sub>] · E[X<sub>i</sub>].
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 // ── Main export ───────────────────────────────────────────────────────────────
 export default function InsuranceDashboard() {
   const [apiKey,   setApiKey]   = useState(() => sessionStorage.getItem("dac_dash_key") || "");
@@ -1901,7 +2362,8 @@ export default function InsuranceDashboard() {
     { id: "coefficients", label: "Coefficients"    },
     { id: "metrics",      label: "Model Metrics"   },
     { id: "security",     label: "Security"        },
-    { id: "optimizer",    label: "Policy Optimizer" },
+    { id: "optimizer",    label: "Policy Optimizer"   },
+    { id: "simulator",    label: "Claims Simulator"   },
   ];
 
   if (!authed) return <AuthGate onAuth={handleAuth} />;
@@ -1967,6 +2429,7 @@ export default function InsuranceDashboard() {
         {activeTab === "metrics"      && <ModelMetricsTab />}
         {activeTab === "security"     && <SecurityTab    username="admin" />}
         {activeTab === "optimizer"    && <PolicyOptimizerTab />}
+        {activeTab === "simulator"    && <ClaimsSimulatorTab />}
       </div>
     </section>
   );
