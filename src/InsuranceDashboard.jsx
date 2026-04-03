@@ -1494,6 +1494,389 @@ function ModelMetricsTab() {
   );
 }
 
+// ── Model Office (Representative Personas) ────────────────────────────────────
+const MODEL_OFFICE = [
+  { id: "P1",  label: "Young office, PP",        age: 27, smoking: "Never",   occupation: "Office/Desk",          region: "Phnom Penh",    tier: "Silver",   dependents: 1, opd: true,  dental: false, maternity: false, weight: 18 },
+  { id: "P2",  label: "Mid office, married",      age: 36, smoking: "Never",   occupation: "Office/Desk",          region: "Phnom Penh",    tier: "Silver",   dependents: 3, opd: true,  dental: false, maternity: false, weight: 15 },
+  { id: "P3",  label: "Young female, maternity",  age: 29, smoking: "Never",   occupation: "Retail/Service",       region: "Phnom Penh",    tier: "Silver",   dependents: 1, opd: true,  dental: false, maternity: true,  weight: 10 },
+  { id: "P4",  label: "Manual labor, mid-age",    age: 43, smoking: "Former",  occupation: "Manual Labor",         region: "Siem Reap",     tier: "Bronze",   dependents: 2, opd: false, dental: false, maternity: false, weight: 12 },
+  { id: "P5",  label: "High-risk industry",       age: 38, smoking: "Current", occupation: "Industrial/High-Risk", region: "Battambang",    tier: "Bronze",   dependents: 1, opd: false, dental: false, maternity: false, weight: 8  },
+  { id: "P6",  label: "Corporate Gold, PP",       age: 45, smoking: "Never",   occupation: "Office/Desk",          region: "Phnom Penh",    tier: "Gold",     dependents: 4, opd: true,  dental: true,  maternity: false, weight: 10 },
+  { id: "P7",  label: "Healthcare worker",        age: 33, smoking: "Never",   occupation: "Healthcare",           region: "Phnom Penh",    tier: "Silver",   dependents: 1, opd: true,  dental: true,  maternity: false, weight: 8  },
+  { id: "P8",  label: "Senior Platinum",          age: 58, smoking: "Former",  occupation: "Retired",              region: "Phnom Penh",    tier: "Platinum", dependents: 2, opd: true,  dental: true,  maternity: false, weight: 7  },
+  { id: "P9",  label: "Rural Bronze, young",      age: 24, smoking: "Never",   occupation: "Retail/Service",       region: "Rural Areas",   tier: "Bronze",   dependents: 1, opd: false, dental: false, maternity: false, weight: 7  },
+  { id: "P10", label: "Provincial family Gold",   age: 41, smoking: "Never",   occupation: "Office/Desk",          region: "Kampong Cham",  tier: "Gold",     dependents: 3, opd: true,  dental: false, maternity: false, weight: 5  },
+];
+
+// ── Parameterized Pricing Engine ──────────────────────────────────────────────
+function computeQuoteWith(profile, params) {
+  // params = { load: {...}, tier: {...}, ded: {...}, famPer: scalar }
+  const ab = ageBand(profile.age);
+  const af = COEFF.age[ab]   || 1;
+  const sf = COEFF.smoke[profile.smoking]     || 1;
+  const of = COEFF.occup[profile.occupation]  || 1;
+  const rf = COEFF.region[profile.region]     || 1;
+  const tf = params.tier[profile.tier]        || 1;
+  const ff = 1 + (profile.dependents - 1) * params.famPer;
+
+  function calcCovWith(cov) {
+    const { freq, sev } = COEFF.base[cov];
+    const efFreq = freq * af * sf * of * rf;
+    const efSev  = sev  * (1 + Math.max(0, profile.age - 30) * 0.006);
+    const eac    = efFreq * efSev; // pure premium, no loading
+    return {
+      expected: eac, // for margin calculation
+      premium:  eac * (1 + params.load[cov]), // loaded premium
+    };
+  }
+
+  const ipd       = calcCovWith("ipd");
+  const dedCredit = params.ded[profile.tier] * 0.10;
+  const ipdPremium = Math.max(ipd.premium * tf - dedCredit, 50);
+  const ipdExpected = Math.max(ipd.expected * tf - dedCredit, 0);
+
+  let totalPremium  = ipdPremium;
+  let totalExpected = ipdExpected;
+
+  for (const [cov, inc] of [["opd", profile.opd], ["dental", profile.dental], ["maternity", profile.maternity]]) {
+    if (!inc) continue;
+    const c = calcCovWith(cov);
+    totalPremium  += c.premium;
+    totalExpected += c.expected;
+  }
+
+  totalPremium  = totalPremium  * ff;
+  totalExpected = totalExpected * ff;
+
+  return { totalPremium, totalExpected };
+}
+
+// ── Portfolio Optimizer ────────────────────────────────────────────────────────
+function runPortfolioOptimizer(personas, constraints, optimizeParams) {
+  const tgt = constraints.targetMargin / 100;
+  const minBound = constraints.minPremium || 200;
+  const maxBound = constraints.maxPremium || 5000;
+  const tierForBound = constraints.premiumTier || "Silver";
+  const depForBound = 1; // single-dependent reference
+
+  // Build parameter grid
+  const loadValues = optimizeParams.load
+    ? [0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50]
+    : [COEFF.load.ipd];
+  const famPerValues = optimizeParams.famPer
+    ? [0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80]
+    : [COEFF.famPer];
+  const tierGoldValues = optimizeParams.tierGold
+    ? [1.25, 1.35, 1.45, 1.55, 1.65]
+    : [COEFF.tier.Gold];
+  const tierPlatValues = optimizeParams.tierPlatinum
+    ? [1.80, 1.95, 2.10, 2.25, 2.40]
+    : [COEFF.tier.Platinum];
+
+  // Normalize weights
+  const totalWeight = personas.reduce((s, p) => s + p.weight, 0);
+  const normalized = personas.map(p => ({ ...p, w: p.weight / totalWeight }));
+
+  // Evaluate all combinations
+  const results = [];
+  for (const load of loadValues) {
+    for (const famPer of famPerValues) {
+      for (const tierGold of tierGoldValues) {
+        for (const tierPlat of tierPlatValues) {
+          const params = {
+            load: { ipd: load, opd: load * 0.833, dental: load * 0.667, maternity: load * 0.833 },
+            tier: { Bronze: COEFF.tier.Bronze, Silver: COEFF.tier.Silver, Gold: tierGold, Platinum: tierPlat },
+            ded:  COEFF.ded,
+            famPer,
+          };
+
+          // Compute portfolio totals
+          let totalPrem = 0, totalExp = 0;
+          for (const p of normalized) {
+            const { totalPremium, totalExpected } = computeQuoteWith(p, params);
+            totalPrem += totalPremium * p.w;
+            totalExp  += totalExpected * p.w;
+          }
+
+          const margin = totalPrem > 0 ? (totalPrem - totalExp) / totalPrem : 0;
+          const avgPrem = totalPrem;
+
+          // Check premium bounds on reference persona
+          const refPersona = { age: 35, smoking: "Never", occupation: "Office/Desk", region: "Phnom Penh", tier: tierForBound, dependents: depForBound, opd: true, dental: false, maternity: false };
+          const { totalPremium: refPrem } = computeQuoteWith(refPersona, params);
+          if (refPrem < minBound || refPrem > maxBound) continue; // violates bounds
+
+          results.push({ load, famPer, tierGold, tierPlat, margin, avgPrem, refPrem });
+        }
+      }
+    }
+  }
+
+  // Filter and rank
+  const tolerance = 0.02;
+  const feasible = results.filter(r => Math.abs(r.margin - tgt) <= tolerance);
+  const ranked = feasible.length > 0 ? feasible : results;
+  ranked.sort((a, b) => {
+    const aDist = Math.abs(a.margin - tgt);
+    const bDist = Math.abs(b.margin - tgt);
+    if (aDist !== bDist) return aDist - bDist;
+    return a.avgPrem - b.avgPrem;
+  });
+
+  const top5 = ranked.slice(0, 5);
+
+  // Sensitivity analysis: margin vs load
+  const sensitivityData = [];
+  for (let load = 0.10; load <= 0.50; load += 0.02) {
+    const params = {
+      load: { ipd: load, opd: load * 0.833, dental: load * 0.667, maternity: load * 0.833 },
+      tier: { Bronze: COEFF.tier.Bronze, Silver: COEFF.tier.Silver, Gold: COEFF.tier.Gold, Platinum: COEFF.tier.Platinum },
+      ded:  COEFF.ded,
+      famPer: COEFF.famPer,
+    };
+    let totalPrem = 0, totalExp = 0;
+    for (const p of normalized) {
+      const { totalPremium, totalExpected } = computeQuoteWith(p, params);
+      totalPrem += totalPremium * p.w;
+      totalExp  += totalExpected * p.w;
+    }
+    const margin = totalPrem > 0 ? (totalPrem - totalExp) / totalPrem : 0;
+    sensitivityData.push({ load: Math.round(load * 100) / 100, margin });
+  }
+
+  return { top5, sensitivityData, feasibleCount: feasible.length };
+}
+
+// ── Policy Optimizer Tab ───────────────────────────────────────────────────────
+function PolicyOptimizerTab() {
+  const [constraints, setConstraints] = useState({ targetMargin: 15, minPremium: 200, maxPremium: 2000, premiumTier: "Silver" });
+  const [optimizeParams, setOptimizeParams] = useState({ load: true, famPer: false, tierGold: false, tierPlatinum: false });
+  const [personas, setPersonas] = useState(MODEL_OFFICE.map(p => ({ ...p })));
+  const [results, setResults] = useState([]);
+  const [sensitivityData, setSensitivityData] = useState([]);
+  const [isRunning, setIsRunning] = useState(false);
+  const [appliedParams, setAppliedParams] = useState(null);
+
+  const handleRun = () => {
+    setIsRunning(true);
+    setTimeout(() => {
+      const { top5, sensitivityData: sens } = runPortfolioOptimizer(personas, constraints, optimizeParams);
+      setResults(top5);
+      setSensitivityData(sens);
+      setIsRunning(false);
+    }, 50);
+  };
+
+  const totalWeight = personas.reduce((s, p) => s + p.weight, 0);
+  const weightOk = Math.abs(totalWeight - 100) < 0.1;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
+      <ConstraintPanel constraints={constraints} setConstraints={setConstraints} optimizeParams={optimizeParams} setOptimizeParams={setOptimizeParams} />
+      <PortfolioPanel personas={personas} setPersonas={setPersonas} weightOk={weightOk} totalWeight={totalWeight} />
+      <OptimizationControls isRunning={isRunning} onRun={handleRun} />
+      {results.length > 0 && (
+        <>
+          {appliedParams && <AppliedParamsBanner appliedParams={appliedParams} />}
+          <ResultsTable results={results} appliedParams={appliedParams} onApply={setAppliedParams} />
+          <SensitivityChart sensitivityData={sensitivityData} targetMargin={constraints.targetMargin} />
+        </>
+      )}
+    </div>
+  );
+}
+
+function ConstraintPanel({ constraints, setConstraints, optimizeParams, setOptimizeParams }) {
+  return (
+    <div style={{ border: `1px solid #e5e7eb`, borderRadius: 8, padding: 16, backgroundColor: "#fafafa" }}>
+      <h3 style={{ margin: "0 0 16 0", fontSize: 16, fontWeight: 600, color: NAVY }}>Constraints & Parameters</h3>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 16 }}>
+        <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <span style={{ fontSize: 12, fontWeight: 600, color: "#666" }}>Target margin (%)</span>
+          <input type="number" value={constraints.targetMargin} onChange={(e) => setConstraints({ ...constraints, targetMargin: +e.target.value })} style={{ padding: 8, border: "1px solid #ddd", borderRadius: 4 }} />
+        </label>
+        <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <span style={{ fontSize: 12, fontWeight: 600, color: "#666" }}>Min premium ($)</span>
+          <input type="number" value={constraints.minPremium} onChange={(e) => setConstraints({ ...constraints, minPremium: +e.target.value })} style={{ padding: 8, border: "1px solid #ddd", borderRadius: 4 }} />
+        </label>
+        <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <span style={{ fontSize: 12, fontWeight: 600, color: "#666" }}>Max premium ($)</span>
+          <input type="number" value={constraints.maxPremium} onChange={(e) => setConstraints({ ...constraints, maxPremium: +e.target.value })} style={{ padding: 8, border: "1px solid #ddd", borderRadius: 4 }} />
+        </label>
+        <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <span style={{ fontSize: 12, fontWeight: 600, color: "#666" }}>Tier for bounds</span>
+          <select value={constraints.premiumTier} onChange={(e) => setConstraints({ ...constraints, premiumTier: e.target.value })} style={{ padding: 8, border: "1px solid #ddd", borderRadius: 4 }}>
+            {["Bronze", "Silver", "Gold", "Platinum"].map(t => <option key={t} value={t}>{t}</option>)}
+          </select>
+        </label>
+      </div>
+      <div style={{ marginTop: 16, paddingTop: 16, borderTop: "1px solid #e5e7eb" }}>
+        <p style={{ margin: "0 0 12 0", fontSize: 12, fontWeight: 600, color: "#666" }}>Optimize parameters:</p>
+        <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+          {["load", "famPer", "tierGold", "tierPlatinum"].map(key => {
+            const labels = { load: "IPD Load Factor", famPer: "Family Factor", tierGold: "Gold Multiplier", tierPlatinum: "Platinum Multiplier" };
+            return (
+              <label key={key} style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <input type="checkbox" checked={optimizeParams[key]} onChange={(e) => setOptimizeParams({ ...optimizeParams, [key]: e.target.checked })} />
+                <span style={{ fontSize: 12 }}>{labels[key]}</span>
+              </label>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PortfolioPanel({ personas, setPersonas, weightOk, totalWeight }) {
+  return (
+    <div style={{ border: `1px solid #e5e7eb`, borderRadius: 8, padding: 16, backgroundColor: "#fafafa" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+        <h3 style={{ margin: 0, fontSize: 16, fontWeight: 600, color: NAVY }}>Model Office Portfolio</h3>
+        <div style={{ fontSize: 12, color: weightOk ? "#22c55e" : "#ef4444", fontWeight: 600 }}>Total weight: {totalWeight.toFixed(1)}%</div>
+      </div>
+      <div style={{ display: "grid", gap: 8, maxHeight: 400, overflowY: "auto" }}>
+        {personas.map((p, i) => (
+          <div key={p.id} style={{ display: "grid", gridTemplateColumns: "1fr 80px", gap: 8, alignItems: "center", padding: 8, backgroundColor: "white", borderRadius: 4, border: "1px solid #e5e7eb" }}>
+            <div style={{ fontSize: 12 }}>
+              <div style={{ fontWeight: 600, color: "#333" }}>{p.label}</div>
+              <div style={{ fontSize: 11, color: "#999", marginTop: 2 }}>{p.age} · {p.smoking} · {p.tier} · {p.dependents} dep</div>
+            </div>
+            <label style={{ display: "flex", alignItems: "center", gap: 4 }}>
+              <input type="range" min="0" max="40" value={p.weight} onChange={(e) => { const np = [...personas]; np[i].weight = +e.target.value; setPersonas(np); }} style={{ flex: 1 }} />
+              <span style={{ fontSize: 11, fontWeight: 600, minWidth: 20, textAlign: "right" }}>{p.weight}%</span>
+            </label>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function OptimizationControls({ isRunning, onRun }) {
+  return (
+    <div style={{ display: "flex", gap: 12 }}>
+      <button onClick={onRun} disabled={isRunning} style={{ padding: "10px 20px", backgroundColor: GOLD_D, color: "#fff", border: "none", borderRadius: 4, fontWeight: 600, cursor: isRunning ? "not-allowed" : "pointer", opacity: isRunning ? 0.6 : 1, display: "flex", alignItems: "center", gap: 8 }}>
+        {isRunning ? <span style={{ display: "inline-block", width: 16, height: 16, border: "2px solid #fff", borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} /> : "▶"}
+        {isRunning ? "Optimizing..." : "Run Optimizer"}
+      </button>
+    </div>
+  );
+}
+
+function AppliedParamsBanner({ appliedParams }) {
+  return (
+    <div style={{ padding: 12, backgroundColor: NAVY, color: GOLD_D, borderRadius: 6, fontSize: 12, lineHeight: "1.6" }}>
+      <strong style={{ color: "white" }}>Applied parameters:</strong>{" "}
+      IPD Load: {Math.round(appliedParams.load * 100)}% (was {Math.round(COEFF.load.ipd * 100)}%) ·{" "}
+      Gold: ×{appliedParams.tierGold.toFixed(2)} (was ×{COEFF.tier.Gold.toFixed(2)}) ·{" "}
+      Fam: {appliedParams.famPer.toFixed(2)} (was {COEFF.famPer.toFixed(2)})
+    </div>
+  );
+}
+
+function ResultsTable({ results, appliedParams, onApply }) {
+  return (
+    <div style={{ border: `1px solid #e5e7eb`, borderRadius: 8, overflow: "hidden" }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+        <thead>
+          <tr style={{ backgroundColor: NAVY, color: "white" }}>
+            <th style={{ padding: 8, textAlign: "left", fontWeight: 600 }}>Rank</th>
+            <th style={{ padding: 8, textAlign: "left", fontWeight: 600 }}>Load</th>
+            <th style={{ padding: 8, textAlign: "left", fontWeight: 600 }}>Gold</th>
+            <th style={{ padding: 8, textAlign: "left", fontWeight: 600 }}>Margin</th>
+            <th style={{ padding: 8, textAlign: "left", fontWeight: 600 }}>Avg Prem</th>
+            <th style={{ padding: 8, textAlign: "center", fontWeight: 600 }}>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          {results.map((r, i) => {
+            const isApplied = appliedParams && appliedParams.load === r.load && appliedParams.tierGold === r.tierGold;
+            return (
+              <tr key={i} style={{ backgroundColor: isApplied ? "#fffbeb" : i % 2 === 0 ? "#fafafa" : "white", borderBottom: "1px solid #e5e7eb", borderLeft: isApplied ? `4px solid ${GOLD_D}` : "4px solid transparent" }}>
+                <td style={{ padding: 8 }}>{i + 1}</td>
+                <td style={{ padding: 8 }}>{Math.round(r.load * 100)}%</td>
+                <td style={{ padding: 8 }}>×{r.tierGold.toFixed(2)}</td>
+                <td style={{ padding: 8, fontWeight: 600, color: r.margin > 0.12 ? "#22c55e" : r.margin > 0.08 ? "#f59e0b" : "#ef4444" }}>{Math.round(r.margin * 100)}%</td>
+                <td style={{ padding: 8 }}>${Math.round(r.avgPrem)}</td>
+                <td style={{ padding: 8, textAlign: "center" }}>
+                  <button onClick={() => onApply({ load: r.load, tierGold: r.tierGold, famPer: r.famPer })} style={{ padding: "4px 8px", fontSize: 11, backgroundColor: GOLD_D, color: "white", border: "none", borderRadius: 4, cursor: "pointer" }}>Apply</button>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function SensitivityChart({ sensitivityData, targetMargin }) {
+  const tgtDecimal = targetMargin / 100;
+  const W = 560, H = 220, ML = 50, MR = 20, MT = 20, MB = 40;
+  const PW = W - ML - MR, PH = H - MT - MB;
+
+  const loadMin = 0.10, loadMax = 0.50, loadRange = loadMax - loadMin;
+  const minMargin = Math.min(...sensitivityData.map(d => d.margin));
+  const maxMargin = Math.max(...sensitivityData.map(d => d.margin));
+  const marginPad = (maxMargin - minMargin) * 0.1;
+  const marMax = Math.max(maxMargin + marginPad, 0.5);
+  const marMin = Math.min(minMargin - marginPad, -0.1);
+  const marginRange = marMax - marMin;
+
+  const xScale = (load) => ML + ((load - loadMin) / loadRange) * PW;
+  const yScale = (margin) => MT + ((marMax - margin) / marginRange) * PH;
+
+  const polyPts = sensitivityData.map(d => `${xScale(d.load)},${yScale(d.margin)}`).join(" ");
+  const tgtY = yScale(tgtDecimal);
+
+  return (
+    <div style={{ border: `1px solid #e5e7eb`, borderRadius: 8, padding: 16, backgroundColor: "#fafafa" }}>
+      <h3 style={{ margin: "0 0 12 0", fontSize: 14, fontWeight: 600, color: NAVY }}>Sensitivity: Margin vs Load Factor</h3>
+      <svg width={W} height={H} style={{ backgroundColor: "white", borderRadius: 4 }}>
+        {/* Gridlines */}
+        {[0.10, 0.20, 0.30, 0.40, 0.50].map(load => <line key={`vgrid-${load}`} x1={xScale(load)} y1={MT} x2={xScale(load)} y2={MT + PH} stroke="#e5e7eb" strokeDasharray="4" strokeWidth={1} />)}
+        {[0, 0.1, 0.2, 0.3, 0.4, 0.5].map(m => <line key={`hgrid-${m}`} x1={ML} y1={yScale(m)} x2={ML + PW} y2={yScale(m)} stroke="#e5e7eb" strokeDasharray="4" strokeWidth={1} />)}
+
+        {/* Target margin line */}
+        <line x1={ML} y1={tgtY} x2={ML + PW} y2={tgtY} stroke={GOLD_D} strokeDasharray="6" strokeWidth={2} />
+
+        {/* Feasibility zone */}
+        <rect x={ML} y={yScale(tgtDecimal + 0.02)} width={PW} height={yScale(tgtDecimal - 0.02) - yScale(tgtDecimal + 0.02)} fill="#dbeafe" opacity={0.3} />
+
+        {/* Margin polyline */}
+        <polyline points={polyPts} stroke={NAVY} strokeWidth={2} fill="none" />
+
+        {/* X-axis labels */}
+        {[0.10, 0.20, 0.30, 0.40, 0.50].map(load => (
+          <text key={`xlabel-${load}`} x={xScale(load)} y={H - 10} textAnchor="middle" fontSize={10} fill="#666">
+            {Math.round(load * 100)}%
+          </text>
+        ))}
+
+        {/* Y-axis labels */}
+        {[0, 0.1, 0.2, 0.3, 0.4, 0.5].map(m => (
+          <text key={`ylabel-${m}`} x={ML - 8} y={yScale(m) + 4} textAnchor="end" fontSize={10} fill="#666">
+            {Math.round(m * 100)}%
+          </text>
+        ))}
+
+        {/* Axis lines */}
+        <line x1={ML} y1={MT} x2={ML} y2={MT + PH} stroke="#333" strokeWidth={1} />
+        <line x1={ML} y1={MT + PH} x2={ML + PW} y2={MT + PH} stroke="#333" strokeWidth={1} />
+
+        {/* Axis labels */}
+        <text x={W / 2} y={H - 2} textAnchor="middle" fontSize={11} fontWeight={600} fill="#333">
+          Load Factor
+        </text>
+        <text x={12} y={H / 2} textAnchor="middle" fontSize={11} fontWeight={600} fill="#333" transform={`rotate(-90 12 ${H / 2})`}>
+          Margin %
+        </text>
+      </svg>
+    </div>
+  );
+}
+
 // ── Main export ───────────────────────────────────────────────────────────────
 export default function InsuranceDashboard() {
   const [apiKey,   setApiKey]   = useState(() => sessionStorage.getItem("dac_dash_key") || "");
@@ -1518,6 +1901,7 @@ export default function InsuranceDashboard() {
     { id: "coefficients", label: "Coefficients"    },
     { id: "metrics",      label: "Model Metrics"   },
     { id: "security",     label: "Security"        },
+    { id: "optimizer",    label: "Policy Optimizer" },
   ];
 
   if (!authed) return <AuthGate onAuth={handleAuth} />;
@@ -1582,6 +1966,7 @@ export default function InsuranceDashboard() {
         {activeTab === "coefficients" && <CoefficientsTab />}
         {activeTab === "metrics"      && <ModelMetricsTab />}
         {activeTab === "security"     && <SecurityTab    username="admin" />}
+        {activeTab === "optimizer"    && <PolicyOptimizerTab />}
       </div>
     </section>
   );
