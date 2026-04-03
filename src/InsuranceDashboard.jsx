@@ -5,7 +5,7 @@
 import { useState, useEffect } from "react";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
-const API_URL      = "https://dac-healthprice-api.onrender.com";
+const API_URL      = "https://snowy-haze-f313.poungrotha01555.workers.dev";
 const NAVY         = "#0d2b7a";
 const GOLD         = "#f5a623";
 const GOLD_D       = "#e67e00";
@@ -1342,13 +1342,17 @@ function ModelMetricsTab() {
   useEffect(() => {
     (async () => {
       try {
-        const r = await fetch(`${API_URL}/api/v2/model-info`);
-        if (!r.ok) throw new Error("Failed to fetch metrics");
+        const r = await fetch(`${API_URL}/api/v2/model-info`, {
+          headers: { "Content-Type": "application/json" },
+          mode: "cors"
+        });
+        if (!r.ok) throw new Error(`HTTP ${r.status}: ${r.statusText}`);
         const data = await r.json();
         setMetrics(data.metrics || {});
         setError(null);
       } catch (e) {
-        setError(e.message);
+        console.error("Metrics fetch error:", e);
+        setError(e.message || "Failed to fetch metrics");
         setMetrics(null);
       } finally {
         setLoading(false);
