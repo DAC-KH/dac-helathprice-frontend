@@ -204,6 +204,8 @@ export default function App() {
           <div className="desktop-nav">
             <div style={{ display:"flex", gap:28 }}>
               {PAGES.map(p => <span key={p} className={`nav-link ${page===p?"active":""}`} onClick={() => { setPage(p); setMenuOpen(false); window.scrollTo(0,0); }}>{p}</span>)}
+              <span className={`nav-link ${page==="Admin"?"active":""}`} onClick={() => { setPage("Admin"); setMenuOpen(false); window.scrollTo(0,0); }}>Admin</span>
+              <span className={`nav-link ${page==="AutoLab"?"active":""}`} style={{ color: page==="AutoLab" ? GOLD : "#f5a623aa" }} onClick={() => { setPage("AutoLab"); setMenuOpen(false); window.scrollTo(0,0); }}>🚗 Auto Lab</span>
             </div>
             <button className="gold-btn" style={{ padding:"10px 28px", fontSize:14 }} onClick={() => { setPage("Pricing"); window.scrollTo(0,0); }}>Get a quote</button>
             <button className="outline-btn" style={{ padding:"8px 20px", fontSize:13 }} onClick={() => { sessionStorage.removeItem("dac_authed"); setAuthed(false); }}>Sign out</button>
