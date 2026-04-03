@@ -1333,6 +1333,163 @@ function SecurityTab({ username }) {
   );
 }
 
+// ── Tab: Model Metrics ─────────────────────────────────────────────────────────
+function ModelMetricsTab() {
+  const [metrics, setMetrics] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch(`${API_URL}/api/v2/model-info`);
+        if (!r.ok) throw new Error("Failed to fetch metrics");
+        const data = await r.json();
+        setMetrics(data.metrics || {});
+        setError(null);
+      } catch (e) {
+        setError(e.message);
+        setMetrics(null);
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
+
+  if (loading) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 20, minHeight: 400 }}>
+        <Card>
+          <div style={{ padding: 20, textAlign: "center", color: TXT2 }}>Loading metrics...</div>
+        </Card>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+        <Card>
+          <div style={{ padding: 20, background: "#fee", borderRadius: 8, color: ERR, fontSize: 13 }}>
+            Error loading metrics: {error}
+          </div>
+        </Card>
+      </div>
+    );
+  }
+
+  if (!metrics || Object.keys(metrics).length === 0) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+        <Card>
+          <SectionTitle>Model Metrics</SectionTitle>
+          <div style={{ padding: "20px 0", background: "#fffbeb", borderRadius: 8, padding: 16, color: "#92400e" }}>
+            <strong>Metrics not available</strong> — retrain the model via the <strong>Data calibration</strong> tab to populate GLM performance metrics.
+          </div>
+        </Card>
+      </div>
+    );
+  }
+
+  const covTypes = ["ipd", "opd", "dental", "maternity"];
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+      <Card>
+        <SectionTitle>Severity Model Performance</SectionTitle>
+        <p style={{ fontSize: 12, color: TXT2, marginBottom: 16 }}>Gamma GLM prediction accuracy (on training data)</p>
+
+        {covTypes.map(cov => {
+          const m = metrics[cov];
+          if (!m || !m.sev) return null;
+          const sev = m.sev;
+          return (
+            <div key={cov} style={{ marginBottom: 20, paddingBottom: 16, borderBottom: cov !== covTypes[covTypes.length-1] ? "1px solid #e5e7eb" : "none" }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: NAVY, marginBottom: 10, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                {cov.toUpperCase()}
+              </div>
+
+              {/* R² bar */}
+              <div style={{ marginBottom: 12 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                  <span style={{ fontSize: 12, color: TXT2 }}>R² (Training)</span>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: NAVY }}>{(sev.r2_train || 0).toFixed(4)}</span>
+                </div>
+                <div style={{ width: "100%", height: 6, background: LTGRAY, borderRadius: 3, overflow: "hidden" }}>
+                  <div style={{ width: `${Math.min((sev.r2_train || 0) * 100, 100)}%`, height: "100%", background: NAVY }}></div>
+                </div>
+              </div>
+
+              {/* R² CV bar */}
+              <div style={{ marginBottom: 12 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                  <span style={{ fontSize: 12, color: TXT2 }}>R² (5-Fold CV)</span>
+                  <span style={{ fontSize: 12, color: TXT2 }}>
+                    <strong style={{ color: NAVY }}>{(sev.r2_cv_mean || 0).toFixed(4)}</strong>
+                    {" "}± {(sev.r2_cv_std || 0).toFixed(4)}
+                  </span>
+                </div>
+                <div style={{ width: "100%", height: 6, background: LTGRAY, borderRadius: 3, overflow: "hidden" }}>
+                  <div style={{ width: `${Math.min((sev.r2_cv_mean || 0) * 100, 100)}%`, height: "100%", background: NAVY }}></div>
+                </div>
+              </div>
+
+              {/* Error metrics */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+                <div style={{ padding: "10px 12px", borderRadius: 8, background: LTGRAY }}>
+                  <div style={{ fontSize: 10, color: TXT2, marginBottom: 4 }}>MSE</div>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: NAVY }}>${Math.round(sev.mse || 0).toLocaleString()}</div>
+                </div>
+                <div style={{ padding: "10px 12px", borderRadius: 8, background: LTGRAY }}>
+                  <div style={{ fontSize: 10, color: TXT2, marginBottom: 4 }}>RMSE</div>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: NAVY }}>${Math.round(sev.rmse || 0).toLocaleString()}</div>
+                </div>
+                <div style={{ padding: "10px 12px", borderRadius: 8, background: LTGRAY }}>
+                  <div style={{ fontSize: 10, color: TXT2, marginBottom: 4 }}>MAE</div>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: NAVY }}>${Math.round(sev.mae || 0).toLocaleString()}</div>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </Card>
+
+      <Card>
+        <SectionTitle>Frequency Model Performance</SectionTitle>
+        <p style={{ fontSize: 12, color: TXT2, marginBottom: 16 }}>Poisson GLM prediction accuracy (cross-validation deviance)</p>
+
+        {covTypes.map(cov => {
+          const m = metrics[cov];
+          if (!m || !m.freq) return null;
+          const freq = m.freq;
+          return (
+            <div key={cov} style={{ marginBottom: 16, paddingBottom: 16, borderBottom: cov !== covTypes[covTypes.length-1] ? "1px solid #e5e7eb" : "none" }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: NAVY, marginBottom: 10, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                {cov.toUpperCase()}
+              </div>
+              <div style={{ padding: "10px 12px", borderRadius: 8, background: LTGRAY }}>
+                <div style={{ fontSize: 12, color: TXT2, marginBottom: 2 }}>5-Fold CV Poisson Deviance</div>
+                <div style={{ fontSize: 14, fontWeight: 600, color: NAVY }}>
+                  {(freq.cv_deviance_mean || 0).toFixed(4)} ± {(freq.cv_deviance_std || 0).toFixed(4)}
+                </div>
+                <div style={{ fontSize: 11, color: TXT2, marginTop: 4 }}>Lower deviance = better fit</div>
+              </div>
+            </div>
+          );
+        })}
+      </Card>
+
+      <Card>
+        <div style={{ padding: "12px 14px", borderRadius: 8, background: "#f0f4ff", borderLeft: `4px solid ${NAVY}` }}>
+          <div style={{ fontSize: 11, color: TXT2, lineHeight: 1.6 }}>
+            <strong>ℹ Metrics Guide:</strong> R² scores closer to 1.0 indicate better model fit. MSE/RMSE/MAE measure average prediction error in dollars. All metrics are computed on synthetic training data. Performance will improve after calibration with real claims data.
+          </div>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
 // ── Main export ───────────────────────────────────────────────────────────────
 export default function InsuranceDashboard() {
   const [apiKey,   setApiKey]   = useState(() => sessionStorage.getItem("dac_dash_key") || "");
@@ -1355,6 +1512,7 @@ export default function InsuranceDashboard() {
     { id: "batch",        label: "Batch quotes"    },
     { id: "calibration",  label: "Data calibration"},
     { id: "coefficients", label: "Coefficients"    },
+    { id: "metrics",      label: "Model Metrics"   },
     { id: "security",     label: "Security"        },
   ];
 
@@ -1418,6 +1576,7 @@ export default function InsuranceDashboard() {
         {activeTab === "batch"        && <BatchTab       apiKey={apiKey} username="admin" />}
         {activeTab === "calibration"  && <CalibrationTab apiKey={apiKey} username="admin" />}
         {activeTab === "coefficients" && <CoefficientsTab />}
+        {activeTab === "metrics"      && <ModelMetricsTab />}
         {activeTab === "security"     && <SecurityTab    username="admin" />}
       </div>
     </section>
